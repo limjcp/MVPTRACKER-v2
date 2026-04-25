@@ -1,0 +1,23 @@
+@import "tailwindcss";
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  background: #0D0F14;
+}
+
+/* Tauri-only: applied in nativeShell.ts — feels like a native app, not a browser tab */
+html.tauri-shell,
+html.tauri-shell body,
+html.tauri-shell #root {
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+html.tauri-shell :where(input, textarea, select, [contenteditable="true"]) {
+  user-select: text;
+  -webkit-user-select: text;
+}

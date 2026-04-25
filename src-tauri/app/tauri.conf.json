@@ -1,0 +1,42 @@
+{
+  "$schema": "../../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "MVPTracker",
+  "version": "0.1.0",
+  "identifier": "com.mvptracker.desktop",
+  "build": {
+    "frontendDist": "../../apps/desktop/dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npm run dev -w @mvptracker/desktop",
+    "beforeBuildCommand": "npm run build -w @mvptracker/desktop"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "MVPTracker",
+        "width": 1100,
+        "height": 720,
+        "resizable": true,
+        "fullscreen": false,
+        "devtools": false,
+        "zoomHotkeysEnabled": false,
+        "browserExtensionsEnabled": false,
+        "allowLinkPreview": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

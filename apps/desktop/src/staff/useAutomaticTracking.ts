@@ -1,0 +1,254 @@
+import { useEffect, useRef } from 'react';
+import { differenceInMinutes, differenceInSeconds, parseISO } from 'date-fns';
+import { invoke, isTauri } from '@tauri-apps/api/core';
+import { useStore } from './store/useStore';
+import type { ActivityEntry, AppSettings } from './types';
+import { ACTIVITY_MERGE_GAP_MINUTES, titleMergeKey } from './utils/activityMerge';
+import { inferAppCategory } from './utils/appCategories';
+
+/** Extract http(s) URL from window title when present (browsers rarely expose real tab URL). */
+export function urlFromWindowTitle(title: string): string | undefined {
+  const m = title.match(/https?:\/\/[^\s)\]>"']+/i);
+  return m ? m[0] : undefined;
+}
+
+function normProcess(s: string) {
+  return s.trim().toLowerCase().replace(/\.exe$/i, '');
+}
+
+export function sliceKey(app: string, title: string) {
+  return `${normProcess(app)}|${title.trim().toLowerCase()}`;
+}
+
+function findResumableActivity(
+  titleKey: string,
+  activities: ActivityEntry[],
+  now: Date
+): ActivityEntry | undefined {
+  let best: ActivityEntry | undefined;
+  let bestEnd = 0;
+  for (const a of activities) {
+    if (a.type !== 'automatic') continue;
+    if (titleMergeKey(a.windowTitle) !== titleKey) continue;
+    const end = parseISO(a.endTime);
+    const gapMin = differenceInMinutes(now, end);
+    if (gapMin >= 0 && gapMin < ACTIVITY_MERGE_GAP_MINUTES) {
+      const t = end.getTime();
+      if (!best || t > bestEnd) {
+        best = a;
+        bestEnd = t;
+      }
+    }
+  }
+  return best;
+}
+
+function isExcluded(processName: string, title: string, exclusionList: string[]): boolean {
+  const p = normProcess(processName);
+  if (!p.trim() && !title.trim()) return true;
+  if (p === 'mvptracker') return true;
+  for (const raw of exclusionList) {
+    const e = normProcess(raw) || raw.trim().toLowerCase();
+    if (!e) continue;
+    if (p.includes(e) || e.includes(p)) return true;
+    if (title.toLowerCase().includes(e)) return true;
+  }
+  return false;
+}
+
+type ActiveWindowPayload = { processName: string; windowTitle: string; available: boolean };
+
+/** IPC may expose camelCase or snake_case depending on serde/Tauri version. */
+function normalizeActiveWindow(raw: unknown): ActiveWindowPayload {
+  if (!raw || typeof raw !== 'object') {
+    return { processName: '', windowTitle: '', available: false };
+  }
+  const o = raw as Record<string, unknown>;
+  return {
+    processName: String(o.processName ?? o.process_name ?? ''),
+    windowTitle: String(o.windowTitle ?? o.window_title ?? ''),
+    available: Boolean(o.available),
+  };
+}
+
+async function loadTrackingPrefs(): Promise<{ trackingEnabled: boolean; exclusionList: string[] }> {
+  const fallback = useStore.getState().settings;
+  if (!isTauri()) {
+    return {
+      trackingEnabled: fallback.trackingEnabled,
+      exclusionList: fallback.exclusionList,
+    };
+  }
+  try {
+    const json = await invoke<string | null>('db_get_settings');
+    if (!json) {
+      return {
+        trackingEnabled: fallback.trackingEnabled,
+        exclusionList: fallback.exclusionList,
+      };
+    }
+    const s = JSON.parse(json) as AppSettings;
+    return {
+      trackingEnabled: s.trackingEnabled ?? true,
+      exclusionList: Array.isArray(s.exclusionList) ? s.exclusionList : fallback.exclusionList,
+    };
+  } catch {
+    return {
+      trackingEnabled: fallback.trackingEnabled,
+      exclusionList: fallback.exclusionList,
+    };
+  }
+}
+
+/**
+ * Polls foreground window (Windows) and merges time into `activities` via the store.
+ * Reads tracking prefs from SQLite each tick so Admin portal changes apply without reload.
+ */
+export function useAutomaticTracking() {
+  const addActivity = useStore((s) => s.addActivity);
+  const updateActivity = useStore((s) => s.updateActivity);
+  const setCurrentApp = useStore((s) => s.setCurrentApp);
+  const setIsTracking = useStore((s) => s.setIsTracking);
+  const setTrackingStatus = useStore((s) => s.setTrackingStatus);
+
+  const currentSliceIdRef = useRef<string | null>(null);
+  const currentSliceKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!isTauri()) {
+      setIsTracking(false);
+      setTrackingStatus('idle');
+      setCurrentApp('');
+      currentSliceIdRef.current = null;
+      currentSliceKeyRef.current = null;
+      return;
+    }
+
+    const intervalMs = 2000;
+    let cancelled = false;
+    let busy = false;
+
+    const tick = async () => {
+      if (cancelled || busy) return;
+      busy = true;
+      try {
+        const { trackingEnabled, exclusionList } = await loadTrackingPrefs();
+        if (cancelled) return;
+
+        if (!trackingEnabled) {
+          setIsTracking(false);
+          setTrackingStatus('idle');
+          setCurrentApp('');
+          currentSliceIdRef.current = null;
+          currentSliceKeyRef.current = null;
+          return;
+        }
+
+        const snap = normalizeActiveWindow(await invoke('get_active_window'));
+        if (cancelled) return;
+
+        if (!snap.available) {
+          setIsTracking(false);
+          setTrackingStatus('idle');
+          setCurrentApp('');
+          currentSliceIdRef.current = null;
+          currentSliceKeyRef.current = null;
+          return;
+        }
+
+        const app = snap.processName.trim() || '(unknown)';
+        const title = snap.windowTitle || '';
+        setCurrentApp(app);
+
+        if (isExcluded(snap.processName, title, exclusionList)) {
+          setIsTracking(false);
+          setTrackingStatus('idle');
+          currentSliceIdRef.current = null;
+          currentSliceKeyRef.current = null;
+          return;
+        }
+
+        setIsTracking(true);
+        setTrackingStatus('active');
+
+        const tKey = titleMergeKey(title);
+        const nowIso = new Date().toISOString();
+        const nowDate = new Date(nowIso);
+        const url = urlFromWindowTitle(title);
+
+        const resume = findResumableActivity(tKey, useStore.getState().activities, nowDate);
+        if (resume) {
+          currentSliceIdRef.current = resume.id;
+          currentSliceKeyRef.current = tKey;
+          const duration = Math.max(0, differenceInSeconds(nowDate, new Date(resume.startTime)));
+          updateActivity(resume.id, {
+            endTime: nowIso,
+            duration,
+            appName: app,
+            windowTitle: title,
+            url: url ?? resume.url,
+            category: inferAppCategory(app, title),
+          });
+          return;
+        }
+
+        if (currentSliceIdRef.current && currentSliceKeyRef.current === tKey) {
+          const id = currentSliceIdRef.current;
+          const row = useStore.getState().activities.find((a) => a.id === id);
+          if (row) {
+            const gapMin = differenceInMinutes(nowDate, parseISO(row.endTime));
+            if (gapMin < ACTIVITY_MERGE_GAP_MINUTES) {
+              const duration = Math.max(0, differenceInSeconds(nowDate, new Date(row.startTime)));
+              updateActivity(id, {
+                endTime: nowIso,
+                duration,
+                appName: app,
+                windowTitle: title,
+                url: url ?? row.url,
+                category: inferAppCategory(app, title),
+              });
+              return;
+            }
+          }
+        }
+
+        currentSliceKeyRef.current = tKey;
+        const id = crypto.randomUUID();
+        currentSliceIdRef.current = id;
+
+        const entry: ActivityEntry = {
+          id,
+          appName: app,
+          windowTitle: title,
+          url,
+          startTime: nowIso,
+          endTime: nowIso,
+          duration: 0,
+          category: inferAppCategory(app, title),
+          productivity: 0,
+          type: 'automatic',
+        };
+        addActivity(entry);
+      } catch {
+        if (!cancelled) {
+          setIsTracking(false);
+          setTrackingStatus('idle');
+        }
+      } finally {
+        busy = false;
+      }
+    };
+
+    void tick();
+    const handle = window.setInterval(() => void tick(), intervalMs);
+    return () => {
+      cancelled = true;
+      clearInterval(handle);
+      setIsTracking(false);
+      setTrackingStatus('idle');
+      setCurrentApp('');
+      currentSliceIdRef.current = null;
+      currentSliceKeyRef.current = null;
+    };
+  }, [addActivity, updateActivity, setCurrentApp, setIsTracking, setTrackingStatus]);
+}

@@ -1,0 +1,41 @@
+{
+  "name": "mvptracker-v2",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @mvptracker/desktop",
+    "build": "npm run build -w @mvptracker/desktop",
+    "preview": "npm run preview -w @mvptracker/desktop",
+    "tauri": "cd \"src-tauri/app\" && npx tauri dev",
+    "tauri:build": "cd \"src-tauri/app\" && npx tauri build"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.104.1",
+    "@tauri-apps/api": "^2.10.1",
+    "clsx": "2.1.1",
+    "date-fns": "^4.1.0",
+    "lucide-react": "^1.9.0",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-router-dom": "^7.9.6",
+    "recharts": "^3.8.1",
+    "tailwind-merge": "3.4.0",
+    "zustand": "^5.0.12"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.1.17",
+    "@tauri-apps/cli": "^2.10.1",
+    "@types/node": "22.19.17",
+    "@types/react": "19.2.7",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "5.1.1",
+    "tailwindcss": "4.1.17",
+    "typescript": "5.9.3",
+    "vite": "7.2.4",
+    "vite-plugin-singlefile": "2.3.0"
+  }
+}
