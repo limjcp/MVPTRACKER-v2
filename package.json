@@ -18,12 +18,15 @@
     "@tauri-apps/api": "^2.10.1",
     "clsx": "2.1.1",
     "date-fns": "^4.1.0",
+    "jspdf": "^2.5.2",
+    "jspdf-autotable": "^3.8.4",
     "lucide-react": "^1.9.0",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-router-dom": "^7.9.6",
     "recharts": "^3.8.1",
     "tailwind-merge": "3.4.0",
+    "xlsx": "^0.18.5",
     "zustand": "^5.0.12"
   },
   "devDependencies": {

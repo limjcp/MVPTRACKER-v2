@@ -23,13 +23,23 @@ import { format, parseISO } from 'date-fns';
 import { useStore } from '../store/useStore';
 import { cn, PROJECT_COLORS } from '../utils/cn';
 import { formatDuration } from '../utils/format';
+import {
+  buildTimesheetPrintHtml,
+  exportReportCsv,
+  exportReportHtml,
+  exportReportPdf,
+  exportReportXlsx,
+  getReportWindow,
+  printHtmlInHiddenFrame,
+  type ReportFormat,
+} from '../utils/reportExport';
 
 type ReportRange = 'today' | '7d' | '14d' | '30d' | 'month' | 'custom';
-type ReportFormat = 'pdf' | 'xlsx' | 'csv' | 'html';
 
 export default function Reports() {
-  const { dailyStats, projects } = useStore();
+  const { dailyStats, projects, activities, manualEntries, settings } = useStore();
   const [range, setRange] = useState<ReportRange>('7d');
+  const [exporting, setExporting] = useState<ReportFormat | null>(null);
   /** `dailyStats` is oldest-first; last entries end on the anchor (today). */
   const periodDays = range === 'today' ? 1 : range === '7d' ? 7 : range === '14d' ? 14 : 30;
   const filteredStats = dailyStats.slice(-periodDays);
@@ -62,6 +72,61 @@ export default function Reports() {
     .sort((a, b) => b[1] - a[1])
     .map(([id, dur]) => ({ project: projects.find((p) => p.id === id), duration: dur }))
     .filter((x) => x.project);
+
+  const defaultRate = settings.defaultHourlyRate ?? 150;
+  const currency = settings.currency ?? 'USD';
+  const billableEstimate = (totalTime / 3600) * defaultRate;
+
+  const handleExport = async (fmt: ReportFormat) => {
+    const win = getReportWindow(filteredStats);
+    if (!win) {
+      window.alert('No data in the selected range.');
+      return;
+    }
+    setExporting(fmt);
+    try {
+      switch (fmt) {
+        case 'csv':
+          await exportReportCsv(filteredStats, activities, manualEntries, projects, win);
+          break;
+        case 'html':
+          await exportReportHtml(filteredStats, activities, manualEntries, projects, settings, win);
+          break;
+        case 'xlsx':
+          await exportReportXlsx(filteredStats, activities, manualEntries, projects, win);
+          break;
+        case 'pdf':
+          await exportReportPdf(filteredStats, activities, manualEntries, projects, settings, win);
+          break;
+        default:
+          break;
+      }
+    } catch (e) {
+      console.error(e);
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes('Save cancelled')) return;
+      window.alert('Export failed. Check the console for details.');
+    } finally {
+      setExporting(null);
+    }
+  };
+
+  const handlePrintTimesheet = () => {
+    const win = getReportWindow(filteredStats);
+    if (!win) {
+      window.alert('No data in the selected range.');
+      return;
+    }
+    const html = buildTimesheetPrintHtml(
+      filteredStats,
+      activities,
+      manualEntries,
+      projects,
+      settings,
+      win
+    );
+    printHtmlInHiddenFrame(html);
+  };
 
   return (
     <div className="flex-1 overflow-y-auto bg-[#0D0F14] p-6">
@@ -112,9 +177,19 @@ export default function Reports() {
             sub: range === 'today' ? 'Today' : `${periodDays}-day period ending today`,
             color: 'violet',
           },
-          { label: 'Productive Time', value: formatDuration(totalProductive), sub: `${Math.round((totalProductive / totalTime) * 100) || 0}% of total`, color: 'emerald' },
+          {
+            label: 'Productive Time',
+            value: formatDuration(totalProductive),
+            sub: `${totalTime > 0 ? Math.round((totalProductive / totalTime) * 100) : 0}% of total`,
+            color: 'emerald',
+          },
           { label: 'Avg Productivity', value: `${avgScore}%`, sub: 'Daily average score', color: 'blue' },
-          { label: 'Billable Estimate', value: `$${(totalTime / 3600 * 150).toFixed(0)}`, sub: 'At $150/hr avg rate', color: 'amber' },
+          {
+            label: 'Billable Estimate',
+            value: `${currency} ${billableEstimate.toFixed(0)}`,
+            sub: `At ${currency} ${defaultRate}/hr (settings)`,
+            color: 'amber',
+          },
         ].map((card) => (
           <div key={card.label} className="bg-[#161920] rounded-2xl p-5 border border-white/[0.05]">
             <p className="text-white/30 text-xs mb-2">{card.label}</p>
@@ -196,8 +271,13 @@ export default function Reports() {
           <div className="flex items-center justify-between px-5 py-4 border-b border-white/[0.06]">
             <h3 className="text-white font-semibold text-[15px]">Daily Timesheet</h3>
             <div className="flex items-center gap-2">
-              <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.1] text-white/50 text-xs transition-colors">
-                <Printer className="w-3 h-3" />Print
+              <button
+                type="button"
+                onClick={handlePrintTimesheet}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.1] text-white/50 text-xs transition-colors hover:text-white/70"
+              >
+                <Printer className="w-3 h-3" />
+                Print
               </button>
             </div>
           </div>
@@ -240,25 +320,42 @@ export default function Reports() {
         <div className="flex items-center justify-between mb-4">
           <div>
             <h3 className="text-white font-semibold text-[15px]">Export Report</h3>
-            <p className="text-white/30 text-xs mt-0.5">Generate a timesheet or invoice-ready report</p>
+            <p className="text-white/30 text-xs mt-0.5">
+              {exporting
+                ? `Preparing ${exporting.toUpperCase()}…`
+                : 'Generate a timesheet or invoice-ready report'}
+            </p>
           </div>
         </div>
         <div className="grid grid-cols-4 gap-3">
-          {([
-            { format: 'pdf' as ReportFormat, label: 'PDF Report', desc: 'Professional timesheet', icon: FileText, color: 'text-red-400 bg-red-500/10' },
-            { format: 'xlsx' as ReportFormat, label: 'Excel / XLSX', desc: 'Spreadsheet with pivot tables', icon: Table, color: 'text-emerald-400 bg-emerald-500/10' },
-            { format: 'csv' as ReportFormat, label: 'CSV Export', desc: 'Raw data for processing', icon: Code, color: 'text-blue-400 bg-blue-500/10' },
-            { format: 'html' as ReportFormat, label: 'HTML Invoice', desc: 'Shareable web report', icon: ExternalLink, color: 'text-amber-400 bg-amber-500/10' },
-          ] as { format: ReportFormat; label: string; desc: string; icon: React.ElementType; color: string }[]).map(({ format: fmt, label, desc, icon: Icon, color }) => (
+          {(
+            [
+              { format: 'pdf' as const, label: 'PDF Report', desc: 'Professional timesheet', icon: FileText, color: 'text-red-400 bg-red-500/10' },
+              { format: 'xlsx' as const, label: 'Excel / XLSX', desc: 'Spreadsheet with pivot tables', icon: Table, color: 'text-emerald-400 bg-emerald-500/10' },
+              { format: 'csv' as const, label: 'CSV Export', desc: 'Raw data for processing', icon: Code, color: 'text-blue-400 bg-blue-500/10' },
+              { format: 'html' as const, label: 'HTML Invoice', desc: 'Shareable web report', icon: ExternalLink, color: 'text-amber-400 bg-amber-500/10' },
+            ] as const
+          ).map(({ format: fmt, label, desc, icon: Icon, color }) => (
             <button
               key={fmt}
-              className="flex flex-col items-start gap-2 p-4 rounded-xl bg-white/[0.03] border border-white/[0.06] hover:bg-white/[0.06] hover:border-white/[0.1] transition-all group"
+              type="button"
+              disabled={Boolean(exporting)}
+              onClick={() => void handleExport(fmt)}
+              className={cn(
+                'flex flex-col items-start gap-2 p-4 rounded-xl border text-left transition-all group',
+                exporting === fmt
+                  ? 'bg-violet-500/15 border-violet-500/30'
+                  : 'bg-white/[0.03] border-white/[0.06] hover:bg-white/[0.06] hover:border-white/[0.1]',
+                exporting && exporting !== fmt && 'opacity-40 pointer-events-none'
+              )}
             >
               <div className={cn('w-8 h-8 rounded-lg flex items-center justify-center', color)}>
                 <Icon className="w-4 h-4" />
               </div>
               <div className="text-left">
-                <p className="text-white/70 text-xs font-medium">{label}</p>
+                <p className="text-white/70 text-xs font-medium">
+                  {exporting === fmt ? 'Exporting…' : label}
+                </p>
                 <p className="text-white/30 text-[10px] mt-0.5">{desc}</p>
               </div>
               <div className="flex items-center gap-1 text-white/20 group-hover:text-white/50 text-[10px] transition-colors mt-auto">

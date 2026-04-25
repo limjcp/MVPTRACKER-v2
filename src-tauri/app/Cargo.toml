@@ -24,6 +24,7 @@ log = "0.4"
 tauri = { version = "2.10.3", features = [] }
 tauri-plugin-log = "2"
 mvptracker_core = { path = "../../crates/core" }
+tauri-plugin-dialog = "2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = [

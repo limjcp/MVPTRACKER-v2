@@ -1,12 +1,13 @@
 import React, { useMemo, useState, useRef, useEffect } from 'react';
 import {
-  Building2,
   ChevronLeft,
   ChevronRight,
   Plus,
   Tag,
   Trash2,
   X,
+  ZoomIn,
+  ZoomOut,
 } from 'lucide-react';
 import { format, parseISO, addDays, subDays, differenceInMinutes, differenceInSeconds } from 'date-fns';
 import { useStore } from '../store/useStore';
@@ -144,7 +145,10 @@ function rescaleManualTimes(
   }
 }
 
-const HOUR_HEIGHT = 56;
+const BASE_HOUR_HEIGHT = 56;
+const TIMELINE_ZOOM_MIN = 0.5;
+const TIMELINE_ZOOM_MAX = 2.5;
+const TIMELINE_ZOOM_STEP = 0.125;
 const DAY_START = 0;
 const DAY_END = 24;
 const TOTAL_HOURS = DAY_END - DAY_START;
@@ -177,8 +181,13 @@ export default function Timeline() {
   const [timeEndDraft, setTimeEndDraft] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [timelineZoom, setTimelineZoom] = useState(1);
   const timelineRef = useRef<HTMLDivElement>(null);
+  const hourHeightRef = useRef(BASE_HOUR_HEIGHT);
   const now = new Date();
+
+  const hourHeight = Math.round(BASE_HOUR_HEIGHT * timelineZoom);
+  hourHeightRef.current = hourHeight;
 
   const dateObj = new Date(selectedDate + 'T00:00:00');
 
@@ -191,7 +200,8 @@ export default function Timeline() {
   useEffect(() => {
     if (isToday && timelineRef.current) {
       const mins = now.getHours() * 60 + now.getMinutes();
-      const scrollTo = (mins / 60) * HOUR_HEIGHT - 120;
+      const h = hourHeightRef.current;
+      const scrollTo = (mins / 60) * h - 120;
       timelineRef.current.scrollTop = Math.max(0, scrollTo);
     }
   }, [isToday, selectedDate]);
@@ -201,14 +211,30 @@ export default function Timeline() {
     const endDate = parseISO(block.endTime);
     const startMinutes = (startDate.getHours() - DAY_START) * 60 + startDate.getMinutes();
     const durationMinutes = Math.max(1, differenceInMinutes(endDate, startDate));
-    const top = (startMinutes / 60) * HOUR_HEIGHT;
-    const height = Math.max((durationMinutes / 60) * HOUR_HEIGHT, 16);
+    const top = (startMinutes / 60) * hourHeight;
+    const height = Math.max((durationMinutes / 60) * hourHeight, 16);
     return { top, height };
   };
 
   const currentTimePosition = () => {
     const mins = (now.getHours() - DAY_START) * 60 + now.getMinutes();
-    return (mins / 60) * HOUR_HEIGHT;
+    return (mins / 60) * hourHeight;
+  };
+
+  const zoomIn = () =>
+    setTimelineZoom((z) => Math.min(TIMELINE_ZOOM_MAX, Math.round((z + TIMELINE_ZOOM_STEP) * 1000) / 1000));
+  const zoomOut = () =>
+    setTimelineZoom((z) => Math.max(TIMELINE_ZOOM_MIN, Math.round((z - TIMELINE_ZOOM_STEP) * 1000) / 1000));
+  const zoomReset = () => setTimelineZoom(1);
+
+  const handleTimelineWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    if (!e.ctrlKey && !e.metaKey) return;
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? -TIMELINE_ZOOM_STEP : TIMELINE_ZOOM_STEP;
+    setTimelineZoom((z) => {
+      const next = Math.round((z + delta) * 1000) / 1000;
+      return Math.min(TIMELINE_ZOOM_MAX, Math.max(TIMELINE_ZOOM_MIN, next));
+    });
   };
 
   const todayCalendarEvents = calendarEvents.filter((e) => {
@@ -272,7 +298,7 @@ export default function Timeline() {
     setSelectedActivity(aids[0] ?? null);
   };
 
-  const timelineHeight = TOTAL_HOURS * HOUR_HEIGHT + 40;
+  const timelineHeight = TOTAL_HOURS * hourHeight + 40;
 
   return (
     <div className="flex-1 flex flex-col bg-[#0D0F14] overflow-hidden min-h-0">
@@ -311,6 +337,37 @@ export default function Timeline() {
         </h2>
 
         <div className="ml-auto flex items-center gap-3">
+          <div
+            className="flex items-center gap-0.5 rounded-lg border border-white/[0.08] bg-white/[0.04] p-0.5"
+            title="Zoom timeline (Ctrl or ⌘ + scroll on the timeline)"
+          >
+            <button
+              type="button"
+              onClick={zoomOut}
+              disabled={timelineZoom <= TIMELINE_ZOOM_MIN}
+              className="w-7 h-7 rounded-md flex items-center justify-center text-white/60 hover:bg-white/[0.08] hover:text-white/90 disabled:opacity-30 disabled:pointer-events-none transition-colors"
+              aria-label="Zoom out timeline"
+            >
+              <ZoomOut className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={zoomReset}
+              className="min-w-[2.75rem] px-1 h-7 rounded-md text-[10px] font-medium tabular-nums text-white/45 hover:bg-white/[0.08] hover:text-white/80 transition-colors"
+              title="Reset zoom"
+            >
+              {Math.round(timelineZoom * 100)}%
+            </button>
+            <button
+              type="button"
+              onClick={zoomIn}
+              disabled={timelineZoom >= TIMELINE_ZOOM_MAX}
+              className="w-7 h-7 rounded-md flex items-center justify-center text-white/60 hover:bg-white/[0.08] hover:text-white/90 disabled:opacity-30 disabled:pointer-events-none transition-colors"
+              aria-label="Zoom in timeline"
+            >
+              <ZoomIn className="w-3.5 h-3.5" />
+            </button>
+          </div>
           <div className="flex items-center gap-4 text-xs text-white/30">
             <span className="flex items-center gap-1.5">
               <span className="w-2.5 h-2.5 rounded bg-violet-500 inline-block" />Auto
@@ -348,6 +405,7 @@ export default function Timeline() {
           <div className="flex-1 flex overflow-hidden min-h-0">
             <div
               ref={timelineRef}
+              onWheel={handleTimelineWheel}
               className="flex-1 overflow-y-auto overflow-x-hidden relative bg-[#0D0F14]"
             >
               <div className="relative" style={{ height: timelineHeight, minWidth: 280 }}>
@@ -356,7 +414,7 @@ export default function Timeline() {
                   const label =
                     hour >= 24 ? '24:00' : `${String(hour).padStart(2, '0')}:00`;
                   return (
-                    <div key={i} className="absolute left-0 right-0 flex items-start" style={{ top: i * HOUR_HEIGHT }}>
+                    <div key={i} className="absolute left-0 right-0 flex items-start" style={{ top: i * hourHeight }}>
                       <span className="w-12 text-right pr-2 text-white/25 text-[10px] -translate-y-2 flex-shrink-0 tabular-nums">
                         {label}
                       </span>
@@ -369,7 +427,7 @@ export default function Timeline() {
                   <div
                     key={`half-${i}`}
                     className="absolute left-12 right-0 border-t border-white/[0.03]"
-                    style={{ top: i * HOUR_HEIGHT + HOUR_HEIGHT / 2 }}
+                    style={{ top: i * hourHeight + hourHeight / 2 }}
                   />
                 ))}
 
@@ -389,7 +447,7 @@ export default function Timeline() {
                 <div className="absolute left-12 right-2 top-0">
                   {timelineBlocks.map((block) => {
                     const style = getBlockStyle(block);
-                    if (style.top < 0 || style.top > TOTAL_HOURS * HOUR_HEIGHT) return null;
+                    if (style.top < 0 || style.top > TOTAL_HOURS * hourHeight) return null;
                     const project = projects.find((p) => p.id === block.projectId);
                     const isSelected = selectedBlock?.id === block.id;
                     const isIdle = block.type === 'idle';
@@ -478,8 +536,8 @@ export default function Timeline() {
                     const end = parseISO(event.endTime);
                     const startMinutes = (start.getHours() - DAY_START) * 60 + start.getMinutes();
                     const durationMinutes = Math.max(1, differenceInMinutes(end, start));
-                    const top = (startMinutes / 60) * HOUR_HEIGHT;
-                    const height = Math.max((durationMinutes / 60) * HOUR_HEIGHT, 20);
+                    const top = (startMinutes / 60) * hourHeight;
+                    const height = Math.max((durationMinutes / 60) * hourHeight, 20);
 
                     return (
                       <div
@@ -844,11 +902,15 @@ function AddManualEntryModal({ onClose }: { onClose: () => void }) {
             <select
               value={projectId}
               onChange={(e) => setProjectId(e.target.value)}
-              className="w-full bg-white/[0.06] border border-white/[0.08] rounded-xl px-3 py-2.5 text-white text-sm focus:outline-none focus:border-violet-500/50"
+              className="app-select-dark w-full rounded-xl border border-white/[0.12] bg-[#0D0F14] px-3 py-2.5 text-sm text-zinc-100 shadow-inner shadow-black/20 focus:border-violet-500/50 focus:outline-none"
             >
-              <option value="">No project</option>
+              <option value="" className="bg-[#0D0F14] text-zinc-200">
+                No project
+              </option>
               {projects.map((p) => (
-                <option key={p.id} value={p.id}>{p.icon} {p.name}</option>
+                <option key={p.id} value={p.id} className="bg-[#0D0F14] text-zinc-100">
+                  {p.icon} {p.name}
+                </option>
               ))}
             </select>
           </div>
@@ -1033,7 +1095,7 @@ function BucketDetailSection({
           )}
         </div>
         <div className="flex items-center gap-1">
-          <Building2 className="w-3.5 h-3.5 text-white/40 shrink-0" />
+          {/* <Building2 className="w-3.5 h-3.5 text-white/40 shrink-0" /> */}
           <select
             value={block.corporationId ?? ''}
             onChange={(e) => {
@@ -1044,15 +1106,19 @@ function BucketDetailSection({
               }
               handleSelectCorp(v || undefined);
             }}
-            className="flex-1 min-w-0 bg-white/[0.06] border border-white/[0.08] rounded-xl px-2 py-1.5 text-white text-[11px] focus:outline-none focus:border-violet-500/50"
+            className="app-select-dark flex-1 min-w-0 rounded-xl border border-white/[0.12] bg-[#0D0F14] px-2 py-1.5 text-[11px] text-zinc-100 shadow-inner shadow-black/20 focus:border-violet-500/50 focus:outline-none"
           >
-            <option value="">— Pick corporation —</option>
+            <option value="" className="bg-[#0D0F14] text-zinc-200">
+              — Pick corporation —
+            </option>
             {corporations.map((c) => (
-              <option key={c.id} value={c.id}>
+              <option key={c.id} value={c.id} className="bg-[#0D0F14] text-zinc-100">
                 {c.name}
               </option>
             ))}
-            <option value="__add__">+ Add new corporation…</option>
+            <option value="__add__" className="bg-[#0D0F14] text-zinc-200">
+              + Add new corporation…
+            </option>
           </select>
         </div>
         {showAddCorp && (
@@ -1072,7 +1138,7 @@ function BucketDetailSection({
                 }
               }}
               placeholder="New corporation name"
-              className="flex-1 min-w-0 bg-white/[0.06] border border-white/[0.08] rounded-xl px-2 py-1.5 text-white text-[11px] placeholder-white/25 focus:outline-none focus:border-violet-500/50"
+              className="flex-1 min-w-0 rounded-xl border border-white/[0.12] bg-[#0D0F14] px-2 py-1.5 text-[11px] text-zinc-100 placeholder:text-zinc-500 focus:border-violet-500/50 focus:outline-none"
             />
             <button
               type="button"
@@ -1102,15 +1168,19 @@ function BucketDetailSection({
         <select
           value={block.taskType ?? ''}
           onChange={(e) => handleSelectTask(e.target.value)}
-          className="w-full min-w-0 bg-white/[0.06] border border-white/[0.08] rounded-xl px-2 py-1.5 text-white text-[11px] focus:outline-none focus:border-violet-500/50"
+          className="app-select-dark w-full min-w-0 rounded-xl border border-white/[0.12] bg-[#0D0F14] px-2 py-1.5 text-[11px] text-zinc-100 shadow-inner shadow-black/20 focus:border-violet-500/50 focus:outline-none"
         >
-          <option value="">— Pick task type —</option>
+          <option value="" className="bg-[#0D0F14] text-zinc-200">
+            — Pick task type —
+          </option>
           {TASK_TYPES.map((t) => (
-            <option key={t.slug} value={t.slug}>
+            <option key={t.slug} value={t.slug} className="bg-[#0D0F14] text-zinc-100">
               {t.label}
             </option>
           ))}
-          <option value={OTHER_TASK_SLUG}>{OTHER_TASK_LABEL}</option>
+          <option value={OTHER_TASK_SLUG} className="bg-[#0D0F14] text-zinc-200">
+            {OTHER_TASK_LABEL}
+          </option>
         </select>
 
         {selectedTaskOpt?.requiresDetail && (
@@ -1125,7 +1195,7 @@ function BucketDetailSection({
               })
             }
             placeholder={selectedTaskOpt.requiresDetail}
-            className="mt-2 w-full bg-white/[0.06] border border-white/[0.08] rounded-xl px-2 py-1.5 text-white text-[11px] placeholder-white/25 focus:outline-none focus:border-violet-500/50"
+            className="mt-2 w-full rounded-xl border border-white/[0.12] bg-[#0D0F14] px-2 py-1.5 text-[11px] text-zinc-100 placeholder:text-zinc-500 focus:border-violet-500/50 focus:outline-none"
           />
         )}
 
@@ -1141,7 +1211,7 @@ function BucketDetailSection({
               })
             }
             placeholder="Describe what you were doing…"
-            className="mt-2 w-full bg-white/[0.06] border border-white/[0.08] rounded-xl px-2 py-1.5 text-white text-[11px] placeholder-white/25 focus:outline-none focus:border-violet-500/50"
+            className="mt-2 w-full rounded-xl border border-white/[0.12] bg-[#0D0F14] px-2 py-1.5 text-[11px] text-zinc-100 placeholder:text-zinc-500 focus:border-violet-500/50 focus:outline-none"
           />
         )}
       </div>

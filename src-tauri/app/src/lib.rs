@@ -2,6 +2,7 @@ mod active_window;
 
 use std::path::PathBuf;
 use tauri::Manager;
+use tauri_plugin_dialog::DialogExt;
 
 #[derive(Clone)]
 struct DbPath(PathBuf);
@@ -9,9 +10,11 @@ struct DbPath(PathBuf);
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
+    .plugin(tauri_plugin_dialog::init())
     .invoke_handler(tauri::generate_handler![
       health,
       get_active_window,
+      save_report_file,
       db_init,
       db_list_projects,
       db_upsert_project,
@@ -65,6 +68,22 @@ fn health() -> mvptracker_core::Health {
 #[tauri::command]
 fn get_active_window() -> active_window::ActiveWindowInfo {
   active_window::snapshot()
+}
+
+/// Opens a native save dialog and writes `contents` to the chosen path.
+/// Runs the blocking dialog on a worker thread so the WebView does not hang.
+#[tauri::command]
+async fn save_report_file(app: tauri::AppHandle, default_name: String, contents: Vec<u8>) -> Result<(), String> {
+  tauri::async_runtime::spawn_blocking(move || {
+    let path = app.dialog().file().set_file_name(default_name).blocking_save_file();
+    let Some(file_path) = path else {
+      return Err("Save cancelled.".to_string());
+    };
+    let pb = file_path.into_path().map_err(|e| format!("{e:?}"))?;
+    std::fs::write(&pb, contents).map_err(|e| e.to_string())
+  })
+  .await
+  .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

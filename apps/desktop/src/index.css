@@ -21,3 +21,16 @@ html.tauri-shell :where(input, textarea, select, [contenteditable="true"]) {
   user-select: text;
   -webkit-user-select: text;
 }
+
+/* Native selects in dark UI: WebView2 / Windows often ignores translucent Tailwind
+   backgrounds on <select>; force readable contrast (matches app shell #0D0F14). */
+select.app-select-dark {
+  background-color: #0d0f14;
+  color: #e5e7eb;
+  color-scheme: dark;
+}
+
+select.app-select-dark option {
+  background-color: #0d0f14;
+  color: #e5e7eb;
+}
