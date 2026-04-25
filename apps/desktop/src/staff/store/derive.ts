@@ -1,10 +1,19 @@
 import { differenceInSeconds, format, parseISO, subDays } from 'date-fns';
-import type { ActivityEntry, DailyStats, ManualEntry, Project, TimelineBlock } from '../types';
+import type {
+  ActivityEntry,
+  BlockTag,
+  BucketActivityContribution,
+  DailyStats,
+  ManualEntry,
+  Project,
+  TimelineBlock,
+} from '../types';
 import { ACTIVITY_MERGE_GAP_MINUTES } from '../utils/activityMerge';
 import { CATEGORY_HEX } from '../utils/appCategories';
 import { PROJECT_COLORS } from '../utils/cn';
 
 const AGGREGATE_SESSION_GAP_MS = ACTIVITY_MERGE_GAP_MINUTES * 60 * 1000;
+const BUCKET_DURATION_MS = 15 * 60 * 1000;
 const AGGREGATE_APP_LABEL = 'Activity';
 
 function blockColorForActivity(a: ActivityEntry, projects: Project[]): string {
@@ -23,8 +32,24 @@ function blockColorForManual(m: ManualEntry, projects: Project[]): string {
   return '#8B5CF6';
 }
 
-/** One timeline bar per session: automatic rows chained by overlap or gap ≤ 15 min (any app). */
-function aggregateAutomaticDayBlocks(
+function bucketIdFor(startMs: number, endMs: number): string {
+  return `bkt-${startMs}-${endMs}`;
+}
+
+export function blockTagBucketId(bucketStartIso: string, bucketEndIso: string): string {
+  return `${bucketStartIso}|${bucketEndIso}`;
+}
+
+/**
+ * Slice automatic activities into rolling 15-minute buckets.
+ *
+ * Sessions are runs of automatic activities where consecutive rows are no more
+ * than `ACTIVITY_MERGE_GAP_MINUTES` apart. Each session anchors its own 15-min
+ * cadence at the first activity's start, so the bucket clock restarts after any
+ * idle gap > 15 min. Buckets are emitted with fixed 15-min width as long as any
+ * activity overlaps the slot; empty slots are skipped.
+ */
+function computeFifteenMinuteBuckets(
   dateStr: string,
   activities: ActivityEntry[],
   projects: Project[]
@@ -35,62 +60,106 @@ function aggregateAutomaticDayBlocks(
 
   if (dayAutomatic.length === 0) return [];
 
-  const clusters: ActivityEntry[][] = [];
-  let cluster: ActivityEntry[] = [];
-  let clusterEndMs = 0;
-
-  const flush = () => {
-    if (cluster.length) clusters.push(cluster);
-    cluster = [];
-    clusterEndMs = 0;
-  };
-
+  const sessions: ActivityEntry[][] = [];
+  let session: ActivityEntry[] = [];
+  let prevEndMs = 0;
   for (const a of dayAutomatic) {
     const s = parseISO(a.startTime).getTime();
     const e = parseISO(a.endTime).getTime();
-    if (cluster.length === 0) {
-      cluster = [a];
-      clusterEndMs = e;
-      continue;
-    }
-    if (s <= clusterEndMs + AGGREGATE_SESSION_GAP_MS) {
-      cluster.push(a);
-      clusterEndMs = Math.max(clusterEndMs, e);
+    if (session.length === 0 || s - prevEndMs > AGGREGATE_SESSION_GAP_MS) {
+      if (session.length) sessions.push(session);
+      session = [a];
     } else {
-      flush();
-      cluster = [a];
-      clusterEndMs = e;
+      session.push(a);
+    }
+    prevEndMs = Math.max(prevEndMs, e);
+  }
+  if (session.length) sessions.push(session);
+
+  const out: TimelineBlock[] = [];
+
+  for (const sess of sessions) {
+    const anchorMs = parseISO(sess[0]!.startTime).getTime();
+    const sessionEndMs = sess.reduce(
+      (m, a) => Math.max(m, parseISO(a.endTime).getTime()),
+      0
+    );
+    const slotCount = Math.max(1, Math.ceil((sessionEndMs - anchorMs) / BUCKET_DURATION_MS));
+
+    for (let i = 0; i < slotCount; i++) {
+      const startMs = anchorMs + i * BUCKET_DURATION_MS;
+      const endMs = startMs + BUCKET_DURATION_MS;
+
+      const contributions: BucketActivityContribution[] = [];
+      let dominant: ActivityEntry | undefined;
+      let dominantOverlap = 0;
+      const labelSet = new Set<string>();
+      const projectIdSet = new Set<string>();
+
+      for (const a of sess) {
+        const aStart = parseISO(a.startTime).getTime();
+        const aEnd = parseISO(a.endTime).getTime();
+        const overlap = Math.max(0, Math.min(aEnd, endMs) - Math.max(aStart, startMs));
+        if (overlap <= 0) continue;
+        contributions.push({
+          activityId: a.id,
+          durationInBucket: Math.round(overlap / 1000),
+        });
+        if (overlap > dominantOverlap) {
+          dominant = a;
+          dominantOverlap = overlap;
+        }
+        if (a.displayLabel?.trim()) labelSet.add(a.displayLabel.trim());
+        if (a.projectId) projectIdSet.add(a.projectId);
+      }
+
+      if (contributions.length === 0) continue;
+
+      const startTime = new Date(startMs).toISOString();
+      const endTime = new Date(endMs).toISOString();
+      const totalSecs = contributions.reduce((s, c) => s + c.durationInBucket, 0);
+      const displayLabel = labelSet.size === 1 ? [...labelSet][0] : undefined;
+      const projectId = projectIdSet.size === 1 ? [...projectIdSet][0] : undefined;
+      const primary = dominant ?? sess[0]!;
+
+      out.push({
+        id: bucketIdFor(startMs, endMs),
+        startTime,
+        endTime,
+        duration: totalSecs,
+        appName: AGGREGATE_APP_LABEL,
+        windowTitle: '',
+        displayLabel,
+        projectId,
+        color: blockColorForActivity(primary, projects),
+        type: 'activity' as const,
+        sourceIds: contributions.map((c) => c.activityId),
+        bucketActivities: contributions,
+      });
     }
   }
-  flush();
 
-  return clusters.map((acts) => {
-    const starts = acts.map((x) => parseISO(x.startTime).getTime());
-    const ends = acts.map((x) => parseISO(x.endTime).getTime());
-    const startMs = Math.min(...starts);
-    const endMs = Math.max(...ends);
-    const startTime = new Date(startMs).toISOString();
-    const endTime = new Date(endMs).toISOString();
-    const duration = Math.max(0, differenceInSeconds(parseISO(endTime), parseISO(startTime)));
-    const sourceIds = acts.map((x) => x.id);
-    const labels = acts.map((x) => x.displayLabel).filter(Boolean) as string[];
-    const displayLabel = labels.length && new Set(labels).size === 1 ? labels[0] : undefined;
-    const projectIds = [...new Set(acts.map((x) => x.projectId).filter(Boolean))] as string[];
-    const projectId = projectIds.length === 1 ? projectIds[0] : undefined;
-    const primary = [...acts].sort((x, y) => y.duration - x.duration)[0]!;
+  return out;
+}
 
+function applyBlockTags(
+  blocks: TimelineBlock[],
+  blockTags: BlockTag[]
+): TimelineBlock[] {
+  if (blockTags.length === 0) return blocks;
+  const byId = new Map<string, BlockTag>();
+  for (const t of blockTags) byId.set(t.id, t);
+
+  return blocks.map((b) => {
+    if (!b.id.startsWith('bkt-')) return b;
+    const tagId = blockTagBucketId(b.startTime, b.endTime);
+    const tag = byId.get(tagId);
+    if (!tag) return b;
     return {
-      id: `agg-${startMs}-${endMs}-${sourceIds[0]}`,
-      startTime,
-      endTime,
-      duration,
-      appName: AGGREGATE_APP_LABEL,
-      windowTitle: '',
-      displayLabel,
-      projectId,
-      color: blockColorForActivity(primary, projects),
-      type: 'activity' as const,
-      sourceIds,
+      ...b,
+      corporationId: tag.corporationId,
+      taskType: tag.taskType,
+      taskTypeDetail: tag.taskTypeDetail,
     };
   });
 }
@@ -99,11 +168,12 @@ export function computeTimelineBlocks(
   dateStr: string,
   activities: ActivityEntry[],
   manualEntries: ManualEntry[],
-  projects: Project[]
+  projects: Project[],
+  blockTags: BlockTag[] = []
 ): TimelineBlock[] {
   const blocks: TimelineBlock[] = [];
 
-  blocks.push(...aggregateAutomaticDayBlocks(dateStr, activities, projects));
+  blocks.push(...computeFifteenMinuteBuckets(dateStr, activities, projects));
 
   for (const a of activities) {
     if (format(parseISO(a.startTime), 'yyyy-MM-dd') !== dateStr) continue;
@@ -138,7 +208,7 @@ export function computeTimelineBlocks(
   }
 
   blocks.sort((x, y) => parseISO(x.startTime).getTime() - parseISO(y.startTime).getTime());
-  return blocks;
+  return applyBlockTags(blocks, blockTags);
 }
 
 function intervalsOverlap(a: TimelineBlock, b: TimelineBlock): boolean {
@@ -208,8 +278,18 @@ export function mergeOverlappingTimelineBlocks(
   const activityById = new Map(activities.map((a) => [a.id, a]));
   const manualById = new Map(manualEntries.map((m) => [m.id, m]));
 
-  const byType = new Map<TimelineBlock['type'], TimelineBlock[]>();
+  // 15-min bucket blocks are disjoint and carry their own `bucketActivities`
+  // payload; never merge them with other blocks (would lose the per-activity
+  // contribution data and the stable bucket id used by block_tags).
+  const passthrough: TimelineBlock[] = [];
+  const mergeable: TimelineBlock[] = [];
   for (const b of blocks) {
+    if (b.id.startsWith('bkt-')) passthrough.push(b);
+    else mergeable.push(b);
+  }
+
+  const byType = new Map<TimelineBlock['type'], TimelineBlock[]>();
+  for (const b of mergeable) {
     const list = byType.get(b.type) ?? [];
     list.push(b);
     byType.set(b.type, list);
@@ -254,7 +334,9 @@ export function mergeOverlappingTimelineBlocks(
     }
   }
 
-  return out.sort((x, y) => parseISO(x.startTime).getTime() - parseISO(y.startTime).getTime());
+  return [...out, ...passthrough].sort(
+    (x, y) => parseISO(x.startTime).getTime() - parseISO(y.startTime).getTime()
+  );
 }
 
 export function computeDailyStats(

@@ -25,6 +25,12 @@ pub fn run() {
       db_delete_activity,
       db_get_settings,
       db_set_settings,
+      db_list_corporations,
+      db_upsert_corporation,
+      db_delete_corporation,
+      db_list_block_tags,
+      db_set_block_tag,
+      db_clear_block_tag,
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {
@@ -156,4 +162,56 @@ fn db_delete_activity(db: tauri::State<'_, DbPath>, id: String) -> Result<(), St
   let conn = mvptracker_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
   mvptracker_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
   mvptracker_core::sqlite::delete_activity(&conn, &id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn db_list_corporations(
+  db: tauri::State<'_, DbPath>,
+) -> Result<Vec<mvptracker_core::sqlite::CorporationRow>, String> {
+  let conn = mvptracker_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
+  mvptracker_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
+  mvptracker_core::sqlite::list_corporations(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn db_upsert_corporation(
+  db: tauri::State<'_, DbPath>,
+  corporation: mvptracker_core::sqlite::CorporationRow,
+) -> Result<(), String> {
+  let conn = mvptracker_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
+  mvptracker_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
+  mvptracker_core::sqlite::upsert_corporation(&conn, &corporation).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn db_delete_corporation(db: tauri::State<'_, DbPath>, id: String) -> Result<(), String> {
+  let conn = mvptracker_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
+  mvptracker_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
+  mvptracker_core::sqlite::delete_corporation(&conn, &id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn db_list_block_tags(
+  db: tauri::State<'_, DbPath>,
+) -> Result<Vec<mvptracker_core::sqlite::BlockTagRow>, String> {
+  let conn = mvptracker_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
+  mvptracker_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
+  mvptracker_core::sqlite::list_block_tags(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn db_set_block_tag(
+  db: tauri::State<'_, DbPath>,
+  tag: mvptracker_core::sqlite::BlockTagRow,
+) -> Result<(), String> {
+  let conn = mvptracker_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
+  mvptracker_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
+  mvptracker_core::sqlite::set_block_tag(&conn, &tag).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn db_clear_block_tag(db: tauri::State<'_, DbPath>, id: String) -> Result<(), String> {
+  let conn = mvptracker_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
+  mvptracker_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
+  mvptracker_core::sqlite::clear_block_tag(&conn, &id).map_err(|e| e.to_string())
 }

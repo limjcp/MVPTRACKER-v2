@@ -10,8 +10,14 @@ import {
   AppSettings,
   ViewType,
   TimelineBlock,
+  Corporation,
+  BlockTag,
 } from '../types';
-import { computeDailyStats, computeTimelineBlocks, mergeOverlappingTimelineBlocks } from './derive';
+import {
+  computeDailyStats,
+  computeTimelineBlocks,
+  mergeOverlappingTimelineBlocks,
+} from './derive';
 import { normalizeStoredCategory } from '../utils/appCategories';
 
 function isTauriRuntime() {
@@ -98,6 +104,48 @@ function toActivityRow(a: ActivityEntry) {
   };
 }
 
+function toCorporationRow(c: Corporation) {
+  return {
+    id: c.id,
+    name: c.name,
+    created_at: c.createdAt,
+  };
+}
+
+function fromCorporationRow(r: any): Corporation {
+  return {
+    id: String(r.id),
+    name: String(r.name),
+    createdAt: String(r.created_at ?? r.createdAt ?? new Date().toISOString()),
+  };
+}
+
+function toBlockTagRow(t: BlockTag) {
+  return {
+    id: t.id,
+    bucket_date: t.bucketDate,
+    bucket_start: t.bucketStart,
+    bucket_end: t.bucketEnd,
+    corporation_id: t.corporationId ?? null,
+    task_type: t.taskType ?? null,
+    task_type_detail: t.taskTypeDetail ?? null,
+    updated_at: t.updatedAt,
+  };
+}
+
+function fromBlockTagRow(r: any): BlockTag {
+  return {
+    id: String(r.id),
+    bucketDate: String(r.bucket_date ?? r.bucketDate),
+    bucketStart: String(r.bucket_start ?? r.bucketStart),
+    bucketEnd: String(r.bucket_end ?? r.bucketEnd),
+    corporationId: r.corporation_id ?? r.corporationId ?? undefined,
+    taskType: r.task_type ?? r.taskType ?? undefined,
+    taskTypeDetail: r.task_type_detail ?? r.taskTypeDetail ?? undefined,
+    updatedAt: String(r.updated_at ?? r.updatedAt ?? new Date().toISOString()),
+  };
+}
+
 function fromActivityRow(r: any): ActivityEntry {
   return {
     id: String(r.id),
@@ -120,9 +168,10 @@ function derivedFrom(
   selectedDate: string,
   activities: ActivityEntry[],
   manualEntries: ManualEntry[],
-  projects: Project[]
+  projects: Project[],
+  blockTags: BlockTag[] = []
 ): { timelineBlocks: TimelineBlock[]; dailyStats: DailyStats[] } {
-  const raw = computeTimelineBlocks(selectedDate, activities, manualEntries, projects);
+  const raw = computeTimelineBlocks(selectedDate, activities, manualEntries, projects, blockTags);
   return {
     timelineBlocks: mergeOverlappingTimelineBlocks(raw, activities, manualEntries),
     dailyStats: computeDailyStats(activities, manualEntries, 30, new Date()),
@@ -154,6 +203,17 @@ interface AppState {
   updateManualEntry: (id: string, updates: Partial<ManualEntry>) => void;
   deleteManualEntry: (id: string) => void;
   deleteManualEntries: (ids: string[]) => void;
+
+  corporations: Corporation[];
+  addCorporation: (name: string) => Corporation;
+  deleteCorporation: (id: string) => void;
+
+  blockTags: BlockTag[];
+  setBlockTag: (
+    bucket: { id: string; bucketDate: string; bucketStart: string; bucketEnd: string },
+    updates: { corporationId?: string; taskType?: string; taskTypeDetail?: string }
+  ) => void;
+  clearBlockTag: (id: string) => void;
 
   calendarEvents: CalendarEvent[];
   recordCalendarEvent: (eventId: string, projectId: string) => void;
@@ -214,10 +274,10 @@ export const useStore = create<AppState>((set, get) => ({
   selectedDate: new Date().toISOString().split('T')[0],
   setView: (view) => set({ currentView: view }),
   setSelectedDate: (date) => {
-    const { activities, manualEntries, projects } = get();
+    const { activities, manualEntries, projects, blockTags } = get();
     set({
       selectedDate: date,
-      ...derivedFrom(date, activities, manualEntries, projects),
+      ...derivedFrom(date, activities, manualEntries, projects, blockTags),
     });
   },
 
@@ -230,8 +290,10 @@ export const useStore = create<AppState>((set, get) => ({
         settings: defaultSettings,
         manualEntries: [],
         activities: [],
+        corporations: [],
+        blockTags: [],
         calendarEvents: [],
-        ...derivedFrom(selectedDate, [], [], []),
+        ...derivedFrom(selectedDate, [], [], [], []),
       });
       return;
     }
@@ -253,13 +315,21 @@ export const useStore = create<AppState>((set, get) => ({
     const activityRows = await invoke<any[]>('db_list_activities');
     const activities = activityRows.map(fromActivityRow);
 
+    const corporationRows = await invoke<any[]>('db_list_corporations');
+    const corporations = corporationRows.map(fromCorporationRow);
+
+    const blockTagRows = await invoke<any[]>('db_list_block_tags');
+    const blockTags = blockTagRows.map(fromBlockTagRow);
+
     set({
       projects,
       settings,
       manualEntries,
       activities,
+      corporations,
+      blockTags,
       calendarEvents: [],
-      ...derivedFrom(selectedDate, activities, manualEntries, projects),
+      ...derivedFrom(selectedDate, activities, manualEntries, projects, blockTags),
     });
   },
 
@@ -267,7 +337,10 @@ export const useStore = create<AppState>((set, get) => ({
   addProject: (project) => {
     set((state) => {
       const projects = [...state.projects, project];
-      return { projects, ...derivedFrom(state.selectedDate, state.activities, state.manualEntries, projects) };
+      return {
+        projects,
+        ...derivedFrom(state.selectedDate, state.activities, state.manualEntries, projects, state.blockTags),
+      };
     });
     if (isTauriRuntime()) void invoke('db_upsert_project', { project: toProjectRow(project) });
   },
@@ -276,12 +349,18 @@ export const useStore = create<AppState>((set, get) => ({
       const projects = state.projects.map((p) => (p.id === id ? { ...p, ...updates } : p));
       const updated = projects.find((p) => p.id === id);
       if (updated && isTauriRuntime()) void invoke('db_upsert_project', { project: toProjectRow(updated) });
-      return { projects, ...derivedFrom(state.selectedDate, state.activities, state.manualEntries, projects) };
+      return {
+        projects,
+        ...derivedFrom(state.selectedDate, state.activities, state.manualEntries, projects, state.blockTags),
+      };
     }),
   deleteProject: (id) => {
     set((state) => {
       const projects = state.projects.filter((p) => p.id !== id);
-      return { projects, ...derivedFrom(state.selectedDate, state.activities, state.manualEntries, projects) };
+      return {
+        projects,
+        ...derivedFrom(state.selectedDate, state.activities, state.manualEntries, projects, state.blockTags),
+      };
     });
     if (isTauriRuntime()) void invoke('db_delete_project', { id });
   },
@@ -294,7 +373,7 @@ export const useStore = create<AppState>((set, get) => ({
       if (next && isTauriRuntime()) void invoke('db_upsert_activity', { activity: toActivityRow(next) });
       return {
         activities,
-        ...derivedFrom(state.selectedDate, activities, state.manualEntries, state.projects),
+        ...derivedFrom(state.selectedDate, activities, state.manualEntries, state.projects, state.blockTags),
       };
     });
   },
@@ -306,7 +385,7 @@ export const useStore = create<AppState>((set, get) => ({
       if (isTauriRuntime()) void invoke('db_upsert_activity', { activity: toActivityRow(activity) });
       return {
         activities,
-        ...derivedFrom(state.selectedDate, activities, state.manualEntries, state.projects),
+        ...derivedFrom(state.selectedDate, activities, state.manualEntries, state.projects, state.blockTags),
       };
     });
   },
@@ -317,7 +396,7 @@ export const useStore = create<AppState>((set, get) => ({
       if (next && isTauriRuntime()) void invoke('db_upsert_activity', { activity: toActivityRow(next) });
       return {
         activities,
-        ...derivedFrom(state.selectedDate, activities, state.manualEntries, state.projects),
+        ...derivedFrom(state.selectedDate, activities, state.manualEntries, state.projects, state.blockTags),
       };
     });
   },
@@ -336,7 +415,7 @@ export const useStore = create<AppState>((set, get) => ({
       const activities = state.activities.filter((a) => !idSet.has(a.id));
       return {
         activities,
-        ...derivedFrom(state.selectedDate, activities, state.manualEntries, state.projects),
+        ...derivedFrom(state.selectedDate, activities, state.manualEntries, state.projects, state.blockTags),
       };
     });
   },
@@ -348,7 +427,7 @@ export const useStore = create<AppState>((set, get) => ({
       if (isTauriRuntime()) void invoke('db_add_manual_entry', { entry: toManualEntryRow(entry) });
       return {
         manualEntries,
-        ...derivedFrom(state.selectedDate, state.activities, manualEntries, state.projects),
+        ...derivedFrom(state.selectedDate, state.activities, manualEntries, state.projects, state.blockTags),
       };
     });
   },
@@ -359,7 +438,7 @@ export const useStore = create<AppState>((set, get) => ({
       if (next && isTauriRuntime()) void invoke('db_update_manual_entry', { entry: toManualEntryRow(next) });
       return {
         manualEntries,
-        ...derivedFrom(state.selectedDate, state.activities, manualEntries, state.projects),
+        ...derivedFrom(state.selectedDate, state.activities, manualEntries, state.projects, state.blockTags),
       };
     });
   },
@@ -378,7 +457,76 @@ export const useStore = create<AppState>((set, get) => ({
       const manualEntries = state.manualEntries.filter((e) => !idSet.has(e.id));
       return {
         manualEntries,
-        ...derivedFrom(state.selectedDate, state.activities, manualEntries, state.projects),
+        ...derivedFrom(state.selectedDate, state.activities, manualEntries, state.projects, state.blockTags),
+      };
+    });
+  },
+
+  corporations: [],
+  addCorporation: (name) => {
+    const trimmed = name.trim();
+    if (!trimmed) {
+      throw new Error('Corporation name is required');
+    }
+    const existing = get().corporations.find(
+      (c) => c.name.toLowerCase() === trimmed.toLowerCase()
+    );
+    if (existing) return existing;
+    const corp: Corporation = {
+      id: crypto.randomUUID(),
+      name: trimmed,
+      createdAt: new Date().toISOString(),
+    };
+    set((state) => ({ corporations: [...state.corporations, corp] }));
+    if (isTauriRuntime()) void invoke('db_upsert_corporation', { corporation: toCorporationRow(corp) });
+    return corp;
+  },
+  deleteCorporation: (id) => {
+    set((state) => {
+      const corporations = state.corporations.filter((c) => c.id !== id);
+      const blockTags = state.blockTags.map((t) =>
+        t.corporationId === id ? { ...t, corporationId: undefined } : t
+      );
+      return {
+        corporations,
+        blockTags,
+        ...derivedFrom(state.selectedDate, state.activities, state.manualEntries, state.projects, blockTags),
+      };
+    });
+    if (isTauriRuntime()) void invoke('db_delete_corporation', { id });
+  },
+
+  blockTags: [],
+  setBlockTag: (bucket, updates) => {
+    set((state) => {
+      const existing = state.blockTags.find((t) => t.id === bucket.id);
+      const merged: BlockTag = {
+        id: bucket.id,
+        bucketDate: bucket.bucketDate,
+        bucketStart: bucket.bucketStart,
+        bucketEnd: bucket.bucketEnd,
+        corporationId: 'corporationId' in updates ? updates.corporationId : existing?.corporationId,
+        taskType: 'taskType' in updates ? updates.taskType : existing?.taskType,
+        taskTypeDetail: 'taskTypeDetail' in updates ? updates.taskTypeDetail : existing?.taskTypeDetail,
+        updatedAt: new Date().toISOString(),
+      };
+      const blockTags = existing
+        ? state.blockTags.map((t) => (t.id === bucket.id ? merged : t))
+        : [...state.blockTags, merged];
+      if (isTauriRuntime()) void invoke('db_set_block_tag', { tag: toBlockTagRow(merged) });
+      return {
+        blockTags,
+        ...derivedFrom(state.selectedDate, state.activities, state.manualEntries, state.projects, blockTags),
+      };
+    });
+  },
+  clearBlockTag: (id) => {
+    set((state) => {
+      const blockTags = state.blockTags.filter((t) => t.id !== id);
+      if (isTauriRuntime()) void invoke('db_clear_block_tag', { id });
+      return {
+        blockTags,
+        ...derivedFrom(state.selectedDate, state.activities, state.manualEntries, state.projects, blockTags),
       };
     });
   },
@@ -421,7 +569,7 @@ export const useStore = create<AppState>((set, get) => ({
       return {
         activeTimers: state.activeTimers.filter((t) => t.id !== timerId),
         manualEntries,
-        ...derivedFrom(state.selectedDate, state.activities, manualEntries, state.projects),
+        ...derivedFrom(state.selectedDate, state.activities, manualEntries, state.projects, state.blockTags),
       };
     });
   },

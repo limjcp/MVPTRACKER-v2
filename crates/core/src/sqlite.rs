@@ -63,6 +63,25 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     );
 
     CREATE INDEX IF NOT EXISTS idx_activities_start ON activities(start_time);
+
+    CREATE TABLE IF NOT EXISTS corporations (
+      id TEXT PRIMARY KEY NOT NULL,
+      name TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS block_tags (
+      id TEXT PRIMARY KEY NOT NULL,
+      bucket_date TEXT NOT NULL,
+      bucket_start TEXT NOT NULL,
+      bucket_end TEXT NOT NULL,
+      corporation_id TEXT,
+      task_type TEXT,
+      task_type_detail TEXT,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(corporation_id) REFERENCES corporations(id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_block_tags_date ON block_tags(bucket_date);
   "#,
   )?;
   add_schema_columns(conn)?;
@@ -354,6 +373,117 @@ pub fn update_manual_entry(conn: &Connection, e: &ManualEntryRow) -> rusqlite::R
 
 pub fn delete_manual_entry(conn: &Connection, id: &str) -> rusqlite::Result<()> {
   conn.execute("DELETE FROM manual_entries WHERE id = ?1", params![id])?;
+  Ok(())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CorporationRow {
+  pub id: String,
+  pub name: String,
+  pub created_at: String,
+}
+
+pub fn list_corporations(conn: &Connection) -> rusqlite::Result<Vec<CorporationRow>> {
+  let mut stmt = conn.prepare(
+    r#"
+    SELECT id, name, created_at
+    FROM corporations
+    ORDER BY name COLLATE NOCASE ASC
+  "#,
+  )?;
+  let rows = stmt.query_map([], |r| {
+    Ok(CorporationRow {
+      id: r.get(0)?,
+      name: r.get(1)?,
+      created_at: r.get(2)?,
+    })
+  })?;
+  rows.collect()
+}
+
+pub fn upsert_corporation(conn: &Connection, c: &CorporationRow) -> rusqlite::Result<()> {
+  conn.execute(
+    r#"
+    INSERT INTO corporations (id, name, created_at)
+    VALUES (?1, ?2, ?3)
+    ON CONFLICT(id) DO UPDATE SET
+      name = excluded.name
+  "#,
+    params![c.id, c.name, c.created_at],
+  )?;
+  Ok(())
+}
+
+pub fn delete_corporation(conn: &Connection, id: &str) -> rusqlite::Result<()> {
+  conn.execute("DELETE FROM corporations WHERE id = ?1", params![id])?;
+  Ok(())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockTagRow {
+  pub id: String,
+  pub bucket_date: String,
+  pub bucket_start: String,
+  pub bucket_end: String,
+  pub corporation_id: Option<String>,
+  pub task_type: Option<String>,
+  pub task_type_detail: Option<String>,
+  pub updated_at: String,
+}
+
+pub fn list_block_tags(conn: &Connection) -> rusqlite::Result<Vec<BlockTagRow>> {
+  let mut stmt = conn.prepare(
+    r#"
+    SELECT id, bucket_date, bucket_start, bucket_end, corporation_id, task_type, task_type_detail, updated_at
+    FROM block_tags
+    ORDER BY bucket_start ASC
+  "#,
+  )?;
+  let rows = stmt.query_map([], |r| {
+    Ok(BlockTagRow {
+      id: r.get(0)?,
+      bucket_date: r.get(1)?,
+      bucket_start: r.get(2)?,
+      bucket_end: r.get(3)?,
+      corporation_id: r.get(4)?,
+      task_type: r.get(5)?,
+      task_type_detail: r.get(6)?,
+      updated_at: r.get(7)?,
+    })
+  })?;
+  rows.collect()
+}
+
+pub fn set_block_tag(conn: &Connection, t: &BlockTagRow) -> rusqlite::Result<()> {
+  conn.execute(
+    r#"
+    INSERT INTO block_tags (id, bucket_date, bucket_start, bucket_end, corporation_id, task_type, task_type_detail, updated_at)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+    ON CONFLICT(id) DO UPDATE SET
+      bucket_date = excluded.bucket_date,
+      bucket_start = excluded.bucket_start,
+      bucket_end = excluded.bucket_end,
+      corporation_id = excluded.corporation_id,
+      task_type = excluded.task_type,
+      task_type_detail = excluded.task_type_detail,
+      updated_at = excluded.updated_at
+  "#,
+    params![
+      t.id,
+      t.bucket_date,
+      t.bucket_start,
+      t.bucket_end,
+      t.corporation_id,
+      t.task_type,
+      t.task_type_detail,
+      t.updated_at
+    ],
+  )?;
+  Ok(())
+}
+
+pub fn clear_block_tag(conn: &Connection, id: &str) -> rusqlite::Result<()> {
+  conn.execute("DELETE FROM block_tags WHERE id = ?1", params![id])?;
   Ok(())
 }
 

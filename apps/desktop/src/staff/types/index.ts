@@ -140,5 +140,36 @@ export interface TimelineBlock {
   type: 'activity' | 'idle' | 'manual' | 'calendar';
   /** When merged for display, underlying activity/manual ids (no prefixes). */
   sourceIds?: string[];
+  /** Populated only for 15-min bucket blocks (`bkt-` prefix). */
+  bucketActivities?: BucketActivityContribution[];
+  /** Tagging state, joined from `block_tags` for bucket blocks. */
+  corporationId?: string;
+  taskType?: string;
+  taskTypeDetail?: string;
+}
+
+export interface BucketActivityContribution {
+  activityId: string;
+  durationInBucket: number;
+}
+
+export interface Corporation {
+  id: string;
+  name: string;
+  createdAt: string;
+}
+
+export interface BlockTag {
+  /** Stable id derived from bucket time range: `${bucketStart}|${bucketEnd}`. */
+  id: string;
+  bucketDate: string;
+  bucketStart: string;
+  bucketEnd: string;
+  corporationId?: string;
+  /** Predefined task slug or `'other'`. */
+  taskType?: string;
+  /** Free-text fill-in (department for 'communicating_with_other_staff', label for 'other'). */
+  taskTypeDetail?: string;
+  updatedAt: string;
 }
 

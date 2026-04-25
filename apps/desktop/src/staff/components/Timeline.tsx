@@ -1,5 +1,6 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useMemo, useState, useRef, useEffect } from 'react';
 import {
+  Building2,
   ChevronLeft,
   ChevronRight,
   Plus,
@@ -13,6 +14,13 @@ import { cn, PROJECT_COLORS } from '../utils/cn';
 import { formatDuration } from '../utils/format';
 import type { ActivityEntry, ManualEntry, TimelineBlock } from '../types';
 import { CATEGORY_HEX } from '../utils/appCategories';
+import {
+  OTHER_TASK_LABEL,
+  OTHER_TASK_SLUG,
+  TASK_TYPES,
+  formatTaskType,
+  getTaskTypeOption,
+} from '../utils/taskTypes';
 import AllActivitiesPanel from './AllActivitiesPanel';
 
 function primaryActivityIds(block: TimelineBlock): string[] {
@@ -29,6 +37,10 @@ function blockMatchesActivityId(block: TimelineBlock, activityId: string): boole
 
 function isAggregatedActivityBlock(block: TimelineBlock): boolean {
   return block.type === 'activity' && block.id.startsWith('agg-');
+}
+
+function isBucketBlock(block: TimelineBlock): boolean {
+  return block.type === 'activity' && block.id.startsWith('bkt-');
 }
 
 function primaryManualIds(block: TimelineBlock): string[] {
@@ -146,6 +158,10 @@ export default function Timeline() {
     manualEntries,
     projects,
     calendarEvents,
+    corporations,
+    addCorporation,
+    setBlockTag,
+    clearBlockTag,
     selectedActivityId,
     setSelectedActivity,
     assignActivityToProject,
@@ -377,6 +393,20 @@ export default function Timeline() {
                     const project = projects.find((p) => p.id === block.projectId);
                     const isSelected = selectedBlock?.id === block.id;
                     const isIdle = block.type === 'idle';
+                    const isBucket = isBucketBlock(block);
+                    const corp = block.corporationId
+                      ? corporations.find((c) => c.id === block.corporationId)
+                      : undefined;
+                    const taskLabel = isBucket
+                      ? formatTaskType(block.taskType, block.taskTypeDetail)
+                      : '';
+                    const tagged = isBucket && (Boolean(corp) || Boolean(block.taskType));
+                    const bucketHeadline = isBucket
+                      ? corp?.name ||
+                        taskLabel ||
+                        block.displayLabel ||
+                        `${format(parseISO(block.startTime), 'HH:mm')}–${format(parseISO(block.endTime), 'HH:mm')}`
+                      : '';
 
                     return (
                       <button
@@ -384,7 +414,11 @@ export default function Timeline() {
                         key={block.id}
                         className={cn(
                           'absolute left-0 right-0 rounded-lg cursor-pointer transition-all duration-150 group overflow-hidden text-left',
-                          isSelected ? 'ring-2 ring-white/40 z-10' : 'hover:z-10 hover:ring-1 hover:ring-white/20'
+                          isSelected
+                            ? 'ring-2 ring-white/40 z-10'
+                            : tagged
+                              ? 'ring-1 ring-emerald-400/40 hover:z-10'
+                              : 'hover:z-10 hover:ring-1 hover:ring-white/20'
                         )}
                         style={{
                           top: style.top,
@@ -397,25 +431,43 @@ export default function Timeline() {
                         <div className="px-2 py-1 h-full flex flex-col justify-center">
                           {style.height > 24 && (
                             <p className="text-[11px] font-medium text-white/80 truncate leading-tight">
-                              {isIdle ? 'Idle / Away' : (block.displayLabel || block.appName)}
+                              {isIdle
+                                ? 'Idle / Away'
+                                : isBucket
+                                  ? bucketHeadline
+                                  : (block.displayLabel || block.appName)}
                             </p>
                           )}
                           {style.height > 40 && (
                             <p className="text-[10px] text-white/40 truncate leading-tight mt-0.5">
-                              {block.windowTitle}
+                              {isBucket
+                                ? taskLabel ||
+                                  `${block.bucketActivities?.length ?? 0} activities`
+                                : block.windowTitle}
                             </p>
                           )}
-                          {style.height > 54 && project && (
+                          {style.height > 54 && !isBucket && project && (
                             <span className={cn('text-[9px] mt-1 font-medium', PROJECT_COLORS[project.color]?.text)}>
                               {project.icon} {project.name}
                             </span>
                           )}
                         </div>
 
-                        <div className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1 pointer-events-none">
-                          <span className="w-5 h-5 rounded bg-white/10 flex items-center justify-center">
-                            <Tag className="w-2.5 h-2.5 text-white/60" />
-                          </span>
+                        <div className="absolute top-1 right-1 flex gap-1 pointer-events-none">
+                          {tagged ? (
+                            <span
+                              className="px-1.5 h-5 rounded bg-emerald-500/30 text-emerald-100 text-[9px] font-semibold flex items-center"
+                              title={`${corp?.name ?? 'Untagged corporation'}${
+                                taskLabel ? ` · ${taskLabel}` : ''
+                              }`}
+                            >
+                              {(corp?.name?.[0] ?? '?').toUpperCase()}
+                            </span>
+                          ) : (
+                            <span className="w-5 h-5 rounded bg-white/10 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                              <Tag className="w-2.5 h-2.5 text-white/60" />
+                            </span>
+                          )}
                         </div>
                       </button>
                     );
@@ -477,22 +529,37 @@ export default function Timeline() {
                     <p className="text-white/40 text-[10px] uppercase tracking-wider mb-1">
                       {primaryManualIds(selectedBlock).length > 0
                         ? 'Entry type'
-                        : isAggregatedActivityBlock(selectedBlock)
-                          ? 'Session'
-                          : 'Application'}
+                        : isBucketBlock(selectedBlock)
+                          ? '15-min block'
+                          : isAggregatedActivityBlock(selectedBlock)
+                            ? 'Session'
+                            : 'Application'}
                     </p>
                     <p className="text-white text-xs font-medium">
                       {primaryManualIds(selectedBlock).length > 0
                         ? selectedBlock.type === 'calendar'
                           ? 'Calendar entry'
                           : 'Manual entry'
-                        : isAggregatedActivityBlock(selectedBlock)
-                          ? 'Automatic tracking (merged)'
-                          : selectedBlock.appName || 'Activity'}
+                        : isBucketBlock(selectedBlock)
+                          ? `${format(parseISO(selectedBlock.startTime), 'HH:mm')} – ${format(parseISO(selectedBlock.endTime), 'HH:mm')}`
+                          : isAggregatedActivityBlock(selectedBlock)
+                            ? 'Automatic tracking (merged)'
+                            : selectedBlock.appName || 'Activity'}
                     </p>
                   </div>
 
-                  {primaryActivityIds(selectedBlock).length > 0 && (
+                  {isBucketBlock(selectedBlock) && (
+                    <BucketDetailSection
+                      block={selectedBlock}
+                      activities={activities}
+                      corporations={corporations}
+                      addCorporation={addCorporation}
+                      setBlockTag={setBlockTag}
+                      clearBlockTag={clearBlockTag}
+                    />
+                  )}
+
+                  {primaryActivityIds(selectedBlock).length > 0 && !isBucketBlock(selectedBlock) && (
                     <div>
                       <p className="text-white/40 text-[10px] uppercase tracking-wider mb-1">Name</p>
                       <input
@@ -539,7 +606,9 @@ export default function Timeline() {
                     </div>
                   )}
 
-                  {selectedBlock.windowTitle && primaryManualIds(selectedBlock).length === 0 && (
+                  {selectedBlock.windowTitle &&
+                    primaryManualIds(selectedBlock).length === 0 &&
+                    !isBucketBlock(selectedBlock) && (
                     <div>
                       <p className="text-white/40 text-[10px] uppercase tracking-wider mb-1">Window / Document</p>
                       <p className="text-white/70 text-[11px] break-words">{selectedBlock.windowTitle}</p>
@@ -547,7 +616,8 @@ export default function Timeline() {
                   )}
 
                   {(primaryActivityIds(selectedBlock).length > 0 ||
-                    primaryManualIds(selectedBlock).length > 0) && (
+                    primaryManualIds(selectedBlock).length > 0) &&
+                    !isBucketBlock(selectedBlock) && (
                     <div className="space-y-2">
                       <p className="text-white/40 text-[10px] uppercase tracking-wider">Time</p>
                       <input
@@ -607,7 +677,8 @@ export default function Timeline() {
                   </div>
 
                   {(primaryActivityIds(selectedBlock).length > 0 ||
-                    primaryManualIds(selectedBlock).length > 0) && (
+                    primaryManualIds(selectedBlock).length > 0) &&
+                    !isBucketBlock(selectedBlock) && (
                     <div>
                       <p className="text-white/40 text-[10px] uppercase tracking-wider mb-2">Assign to Project</p>
                       {selectedBlock.projectId && (
@@ -666,7 +737,8 @@ export default function Timeline() {
                   )}
 
                   {(primaryActivityIds(selectedBlock).length > 0 ||
-                    primaryManualIds(selectedBlock).length > 0) && (
+                    primaryManualIds(selectedBlock).length > 0) &&
+                    !isBucketBlock(selectedBlock) && (
                     <div className="pt-2 border-t border-white/[0.06]">
                       {!deleteConfirm ? (
                         <button
@@ -821,5 +893,274 @@ function AddManualEntryModal({ onClose }: { onClose: () => void }) {
         </form>
       </div>
     </div>
+  );
+}
+
+type BucketDetailProps = {
+  block: TimelineBlock;
+  activities: ActivityEntry[];
+  corporations: ReturnType<typeof useStore.getState>['corporations'];
+  addCorporation: ReturnType<typeof useStore.getState>['addCorporation'];
+  setBlockTag: ReturnType<typeof useStore.getState>['setBlockTag'];
+  clearBlockTag: ReturnType<typeof useStore.getState>['clearBlockTag'];
+};
+
+function BucketDetailSection({
+  block,
+  activities,
+  corporations,
+  addCorporation,
+  setBlockTag,
+  clearBlockTag,
+}: BucketDetailProps) {
+  const [newCorpDraft, setNewCorpDraft] = useState('');
+  const [showAddCorp, setShowAddCorp] = useState(false);
+  const [otherDraft, setOtherDraft] = useState('');
+  const [detailDraft, setDetailDraft] = useState('');
+
+  useEffect(() => {
+    setShowAddCorp(false);
+    setNewCorpDraft('');
+    setOtherDraft(block.taskType === OTHER_TASK_SLUG ? (block.taskTypeDetail ?? '') : '');
+    const opt = getTaskTypeOption(block.taskType);
+    setDetailDraft(opt?.requiresDetail ? (block.taskTypeDetail ?? '') : '');
+  }, [block.id, block.taskType, block.taskTypeDetail]);
+
+  const bucketDate = useMemo(
+    () => format(parseISO(block.startTime), 'yyyy-MM-dd'),
+    [block.startTime]
+  );
+  const tagBucketRef = useMemo(
+    () => ({
+      id: `${block.startTime}|${block.endTime}`,
+      bucketDate,
+      bucketStart: block.startTime,
+      bucketEnd: block.endTime,
+    }),
+    [bucketDate, block.startTime, block.endTime]
+  );
+
+  const contributions = useMemo(() => {
+    const list = block.bucketActivities ?? [];
+    return list
+      .map((c) => {
+        const a = activities.find((x) => x.id === c.activityId);
+        return a ? { activity: a, secs: c.durationInBucket } : undefined;
+      })
+      .filter((x): x is { activity: ActivityEntry; secs: number } => Boolean(x))
+      .sort((a, b) => b.secs - a.secs);
+  }, [block.bucketActivities, activities]);
+
+  const selectedTaskOpt = getTaskTypeOption(block.taskType);
+  const isOther = block.taskType === OTHER_TASK_SLUG;
+
+  const handleSelectCorp = (id: string | undefined) => {
+    setBlockTag(tagBucketRef, { corporationId: id });
+  };
+
+  const handleAddCorp = () => {
+    const name = newCorpDraft.trim();
+    if (!name) return;
+    const corp = addCorporation(name);
+    setNewCorpDraft('');
+    setShowAddCorp(false);
+    setBlockTag(tagBucketRef, { corporationId: corp.id });
+  };
+
+  const handleSelectTask = (slug: string) => {
+    if (slug === '') {
+      setBlockTag(tagBucketRef, { taskType: undefined, taskTypeDetail: undefined });
+      setOtherDraft('');
+      setDetailDraft('');
+      return;
+    }
+    if (slug === OTHER_TASK_SLUG) {
+      setBlockTag(tagBucketRef, { taskType: OTHER_TASK_SLUG, taskTypeDetail: otherDraft.trim() || undefined });
+      return;
+    }
+    const opt = getTaskTypeOption(slug);
+    setBlockTag(tagBucketRef, {
+      taskType: slug,
+      taskTypeDetail: opt?.requiresDetail ? (detailDraft.trim() || undefined) : undefined,
+    });
+  };
+
+  const isFullyTagged = Boolean(block.corporationId) && Boolean(block.taskType);
+
+  return (
+    <>
+      <div>
+        <p className="text-white/40 text-[10px] uppercase tracking-wider mb-1">
+          Activities in this 15 min ({contributions.length})
+        </p>
+        {contributions.length === 0 ? (
+          <p className="text-white/40 text-[11px]">No tracked activities.</p>
+        ) : (
+          <ul className="space-y-1 max-h-44 overflow-y-auto pr-1">
+            {contributions.map(({ activity, secs }) => (
+              <li
+                key={activity.id}
+                className="bg-white/[0.04] border border-white/[0.06] rounded-lg px-2 py-1.5"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-white/85 text-[11px] font-medium truncate">
+                    {activity.appName}
+                  </span>
+                  <span className="text-white/40 text-[10px] tabular-nums shrink-0">
+                    {formatDuration(secs)}
+                  </span>
+                </div>
+                <p className="text-white/45 text-[10px] truncate" title={activity.windowTitle}>
+                  {activity.windowTitle || activity.url || activity.filePath || '—'}
+                </p>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <div>
+        <div className="flex items-center justify-between mb-1">
+          <p className="text-white/40 text-[10px] uppercase tracking-wider">Corporation</p>
+          {block.corporationId && (
+            <button
+              type="button"
+              onClick={() => handleSelectCorp(undefined)}
+              className="text-[10px] text-white/40 hover:text-white/70"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+        <div className="flex items-center gap-1">
+          <Building2 className="w-3.5 h-3.5 text-white/40 shrink-0" />
+          <select
+            value={block.corporationId ?? ''}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v === '__add__') {
+                setShowAddCorp(true);
+                return;
+              }
+              handleSelectCorp(v || undefined);
+            }}
+            className="flex-1 min-w-0 bg-white/[0.06] border border-white/[0.08] rounded-xl px-2 py-1.5 text-white text-[11px] focus:outline-none focus:border-violet-500/50"
+          >
+            <option value="">— Pick corporation —</option>
+            {corporations.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+            <option value="__add__">+ Add new corporation…</option>
+          </select>
+        </div>
+        {showAddCorp && (
+          <div className="mt-2 flex gap-1">
+            <input
+              type="text"
+              autoFocus
+              value={newCorpDraft}
+              onChange={(e) => setNewCorpDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handleAddCorp();
+                } else if (e.key === 'Escape') {
+                  setShowAddCorp(false);
+                  setNewCorpDraft('');
+                }
+              }}
+              placeholder="New corporation name"
+              className="flex-1 min-w-0 bg-white/[0.06] border border-white/[0.08] rounded-xl px-2 py-1.5 text-white text-[11px] placeholder-white/25 focus:outline-none focus:border-violet-500/50"
+            />
+            <button
+              type="button"
+              onClick={handleAddCorp}
+              disabled={!newCorpDraft.trim()}
+              className="px-2 py-1.5 rounded-lg text-[11px] font-medium bg-violet-500/25 text-violet-200 border border-violet-500/30 hover:bg-violet-500/35 disabled:opacity-40"
+            >
+              Save
+            </button>
+          </div>
+        )}
+      </div>
+
+      <div>
+        <div className="flex items-center justify-between mb-1">
+          <p className="text-white/40 text-[10px] uppercase tracking-wider">Task type</p>
+          {block.taskType && (
+            <button
+              type="button"
+              onClick={() => handleSelectTask('')}
+              className="text-[10px] text-white/40 hover:text-white/70"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+        <select
+          value={block.taskType ?? ''}
+          onChange={(e) => handleSelectTask(e.target.value)}
+          className="w-full min-w-0 bg-white/[0.06] border border-white/[0.08] rounded-xl px-2 py-1.5 text-white text-[11px] focus:outline-none focus:border-violet-500/50"
+        >
+          <option value="">— Pick task type —</option>
+          {TASK_TYPES.map((t) => (
+            <option key={t.slug} value={t.slug}>
+              {t.label}
+            </option>
+          ))}
+          <option value={OTHER_TASK_SLUG}>{OTHER_TASK_LABEL}</option>
+        </select>
+
+        {selectedTaskOpt?.requiresDetail && (
+          <input
+            type="text"
+            value={detailDraft}
+            onChange={(e) => setDetailDraft(e.target.value)}
+            onBlur={() =>
+              setBlockTag(tagBucketRef, {
+                taskType: block.taskType,
+                taskTypeDetail: detailDraft.trim() || undefined,
+              })
+            }
+            placeholder={selectedTaskOpt.requiresDetail}
+            className="mt-2 w-full bg-white/[0.06] border border-white/[0.08] rounded-xl px-2 py-1.5 text-white text-[11px] placeholder-white/25 focus:outline-none focus:border-violet-500/50"
+          />
+        )}
+
+        {isOther && (
+          <input
+            type="text"
+            value={otherDraft}
+            onChange={(e) => setOtherDraft(e.target.value)}
+            onBlur={() =>
+              setBlockTag(tagBucketRef, {
+                taskType: OTHER_TASK_SLUG,
+                taskTypeDetail: otherDraft.trim() || undefined,
+              })
+            }
+            placeholder="Describe what you were doing…"
+            className="mt-2 w-full bg-white/[0.06] border border-white/[0.08] rounded-xl px-2 py-1.5 text-white text-[11px] placeholder-white/25 focus:outline-none focus:border-violet-500/50"
+          />
+        )}
+      </div>
+
+      {(block.corporationId || block.taskType) && (
+        <button
+          type="button"
+          onClick={() => clearBlockTag(tagBucketRef.id)}
+          className="w-full py-1.5 rounded-lg text-[11px] text-white/50 border border-white/[0.08] hover:bg-white/[0.06] hover:text-white/70"
+        >
+          Remove tags from this block
+        </button>
+      )}
+
+      {!isFullyTagged && (
+        <p className="text-white/30 text-[10px] leading-snug">
+          Pick a corporation and a task type to mark this 15-minute slot as logged.
+        </p>
+      )}
+    </>
   );
 }
