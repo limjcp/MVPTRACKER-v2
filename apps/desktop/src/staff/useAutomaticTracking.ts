@@ -4,7 +4,7 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import { useStore } from './store/useStore';
 import type { ActivityEntry, AppSettings } from './types';
 import { ACTIVITY_MERGE_GAP_MINUTES, titleMergeKey } from './utils/activityMerge';
-import { inferAppCategory } from './utils/appCategories';
+import { inferAppCategory, inferProductivityFromCategory } from './utils/appCategories';
 
 /** Extract http(s) URL from window title when present (browsers rarely expose real tab URL). */
 export function urlFromWindowTitle(title: string): string | undefined {
@@ -104,7 +104,7 @@ async function loadTrackingPrefs(): Promise<{ trackingEnabled: boolean; exclusio
  * Polls foreground window (Windows) and merges time into `activities` via the store.
  * Reads tracking prefs from SQLite each tick so Admin portal changes apply without reload.
  */
-export function useAutomaticTracking() {
+export function useAutomaticTracking(enabled = true) {
   const addActivity = useStore((s) => s.addActivity);
   const updateActivity = useStore((s) => s.updateActivity);
   const setCurrentApp = useStore((s) => s.setCurrentApp);
@@ -115,7 +115,7 @@ export function useAutomaticTracking() {
   const currentSliceKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!isTauri()) {
+    if (!enabled || !isTauri()) {
       setIsTracking(false);
       setTrackingStatus('idle');
       setCurrentApp('');
@@ -181,13 +181,15 @@ export function useAutomaticTracking() {
           currentSliceIdRef.current = resume.id;
           currentSliceKeyRef.current = tKey;
           const duration = Math.max(0, differenceInSeconds(nowDate, new Date(resume.startTime)));
+          const category = inferAppCategory(app, title);
           updateActivity(resume.id, {
             endTime: nowIso,
             duration,
             appName: app,
             windowTitle: title,
             url: url ?? resume.url,
-            category: inferAppCategory(app, title),
+            category,
+            productivity: inferProductivityFromCategory(category),
           });
           return;
         }
@@ -199,13 +201,15 @@ export function useAutomaticTracking() {
             const gapMin = differenceInMinutes(nowDate, parseISO(row.endTime));
             if (gapMin < ACTIVITY_MERGE_GAP_MINUTES) {
               const duration = Math.max(0, differenceInSeconds(nowDate, new Date(row.startTime)));
+              const category = inferAppCategory(app, title);
               updateActivity(id, {
                 endTime: nowIso,
                 duration,
                 appName: app,
                 windowTitle: title,
                 url: url ?? row.url,
-                category: inferAppCategory(app, title),
+                category,
+                productivity: inferProductivityFromCategory(category),
               });
               return;
             }
@@ -216,6 +220,7 @@ export function useAutomaticTracking() {
         const id = crypto.randomUUID();
         currentSliceIdRef.current = id;
 
+        const category = inferAppCategory(app, title);
         const entry: ActivityEntry = {
           id,
           appName: app,
@@ -224,8 +229,8 @@ export function useAutomaticTracking() {
           startTime: nowIso,
           endTime: nowIso,
           duration: 0,
-          category: inferAppCategory(app, title),
-          productivity: 0,
+          category,
+          productivity: inferProductivityFromCategory(category),
           type: 'automatic',
         };
         addActivity(entry);
@@ -250,5 +255,5 @@ export function useAutomaticTracking() {
       currentSliceIdRef.current = null;
       currentSliceKeyRef.current = null;
     };
-  }, [addActivity, updateActivity, setCurrentApp, setIsTracking, setTrackingStatus]);
+  }, [enabled, addActivity, updateActivity, setCurrentApp, setIsTracking, setTrackingStatus]);
 }

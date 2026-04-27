@@ -112,6 +112,7 @@ export function buildDailySummaryTable(
     'total_seconds',
     'productive_seconds',
     'unproductive_seconds',
+    'idle_seconds',
     'productivity_score',
     ...projCols.map((p) => `project_hours_${sanitizeKey(p.name)}`),
   ];
@@ -121,6 +122,7 @@ export function buildDailySummaryTable(
       s.totalTime,
       s.productiveTime,
       s.unproductiveTime,
+      s.idleTime ?? 0,
       s.productivityScore,
     ];
     for (const p of projCols) {

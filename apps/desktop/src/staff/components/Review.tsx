@@ -26,7 +26,12 @@ import { useStore } from '../store/useStore';
 import { cn, PROJECT_COLORS } from '../utils/cn';
 import { formatDuration } from '../utils/format';
 import { AppCategory, ActivityEntry } from '../types';
-import { APP_CATEGORY_ORDER, CATEGORY_HEX, CATEGORY_LABELS } from '../utils/appCategories';
+import {
+  APP_CATEGORY_ORDER,
+  CATEGORY_HEX,
+  CATEGORY_LABELS,
+  effectiveActivityProductivity,
+} from '../utils/appCategories';
 
 const CATEGORY_ICONS: Record<AppCategory, React.ElementType> = {
   browser: Globe,
@@ -53,10 +58,17 @@ const PRODUCTIVITY_LABELS: Record<number, { label: string; color: string }> = {
 };
 
 export default function Review() {
-  const { selectedDate, setSelectedDate, activities, projects, assignActivityToProject } = useStore();
+  const {
+    selectedDate,
+    setSelectedDate,
+    activities,
+    projects,
+    assignActivityToProject,
+    reviewProjectFilter,
+    setReviewProjectFilter,
+  } = useStore();
   const [selectedActivity, setSelectedActivity] = useState<ActivityEntry | null>(null);
   const [filterCategory, setFilterCategory] = useState<AppCategory | 'all'>('all');
-  const [filterProject, setFilterProject] = useState<string>('all');
 
   const dateObj = new Date(selectedDate + 'T00:00:00');
   const now = new Date();
@@ -71,12 +83,16 @@ export default function Review() {
 
   const filtered = dayActivities.filter((a) => {
     if (filterCategory !== 'all' && a.category !== filterCategory) return false;
-    if (filterProject !== 'all' && a.projectId !== filterProject) return false;
-    return true;
+    const fp = reviewProjectFilter;
+    if (fp === 'all') return true;
+    if (fp === 'unassigned') return !a.projectId;
+    return a.projectId === fp;
   });
 
-  const totalTime = dayActivities.reduce((s, a) => s + a.duration, 0);
-  const productiveTime = dayActivities.filter((a) => a.productivity > 0).reduce((s, a) => s + a.duration, 0);
+  const totalTime = filtered.reduce((s, a) => s + a.duration, 0);
+  const productiveTime = filtered
+    .filter((a) => effectiveActivityProductivity(a) > 0)
+    .reduce((s, a) => s + a.duration, 0);
   const unassignedCount = dayActivities.filter((a) => !a.projectId).length;
 
   // Group by hour
@@ -132,8 +148,8 @@ export default function Review() {
             ))}
           </select>
           <select
-            value={filterProject}
-            onChange={(e) => setFilterProject(e.target.value)}
+            value={reviewProjectFilter}
+            onChange={(e) => setReviewProjectFilter(e.target.value)}
             className="bg-[#161920] border border-white/[0.06] rounded-xl px-3 py-1.5 text-white/60 text-xs focus:outline-none focus:border-violet-500/50"
           >
             <option value="all">All Projects</option>
@@ -198,7 +214,8 @@ export default function Review() {
                           const Icon = CATEGORY_ICONS[activity.category] || Activity;
                           const color = CATEGORY_COLORS[activity.category] || '#6B7280';
                           const project = projects.find((p) => p.id === activity.projectId);
-                          const productivity = PRODUCTIVITY_LABELS[activity.productivity];
+                          const productivity =
+                            PRODUCTIVITY_LABELS[effectiveActivityProductivity(activity)];
                           const isSelected = selectedActivity?.id === activity.id;
 
                           return (
@@ -282,7 +299,13 @@ export default function Review() {
                 return (
                   <button
                     key={p.id}
-                    onClick={() => assignActivityToProject(selectedActivity.id, p.id)}
+                    onClick={() => {
+                      const nextProjectId = selectedActivity.projectId === p.id ? undefined : p.id;
+                      assignActivityToProject(selectedActivity.id, nextProjectId);
+                      setSelectedActivity((prev) =>
+                        prev && prev.id === selectedActivity.id ? { ...prev, projectId: nextProjectId } : prev
+                      );
+                    }}
                     className={cn(
                       'w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border text-xs transition-all',
                       isAssigned

@@ -38,6 +38,7 @@ export default function Sidebar() {
   const {
     currentView,
     setView,
+    setReviewProjectFilter,
     activeTimers,
     stopTimer,
     startTimer,
@@ -121,7 +122,10 @@ export default function Sidebar() {
               <button
                 key={item.id}
                 type="button"
-                onClick={() => setView(item.id)}
+                onClick={() => {
+                  setView(item.id);
+                  if (item.id === 'review') setReviewProjectFilter('all');
+                }}
                 className={cn(
                   'w-full flex items-center gap-3 px-3 py-2 rounded-xl text-[13px] font-medium transition-all duration-150',
                   active
@@ -146,7 +150,10 @@ export default function Sidebar() {
             <p className="px-2 text-[10px] font-semibold uppercase tracking-wider text-white/25 mb-2">Private</p>
             <button
               type="button"
-              onClick={() => setView('timeline')}
+              onClick={() => {
+                setReviewProjectFilter('all');
+                setView('review');
+              }}
               className="w-full flex items-center justify-between px-2.5 py-2 rounded-lg hover:bg-white/[0.05] text-left"
             >
               <span className="text-white/70 text-xs">All activities</span>
@@ -154,7 +161,10 @@ export default function Sidebar() {
             </button>
             <button
               type="button"
-              onClick={() => setView('timeline')}
+              onClick={() => {
+                setReviewProjectFilter('unassigned');
+                setView('review');
+              }}
               className="w-full flex items-center justify-between px-2.5 py-2 rounded-lg hover:bg-white/[0.05] text-left"
             >
               <span className="text-white/70 text-xs">Unassigned</span>
@@ -175,7 +185,8 @@ export default function Sidebar() {
                       type="button"
                       key={p.id}
                       onClick={() => {
-                        setView('timeline');
+                        setReviewProjectFilter(p.id);
+                        setView('review');
                       }}
                       className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-white/[0.05] text-left"
                     >
@@ -220,7 +231,10 @@ export default function Sidebar() {
                     <button
                       type="button"
                       key={p.id}
-                      onClick={() => setView('timeline')}
+                      onClick={() => {
+                        setReviewProjectFilter(p.id);
+                        setView('review');
+                      }}
                       className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-white/[0.05] text-left"
                     >
                       <span className={cn('w-2 h-2 rounded-full flex-shrink-0', colors.bg)} />

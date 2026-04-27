@@ -10,7 +10,8 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import { format, parseISO, addDays, subDays, differenceInMinutes, differenceInSeconds } from 'date-fns';
-import { useStore } from '../store/useStore';
+import { useStore, TIMELINE_ZOOM_MIN, TIMELINE_ZOOM_MAX } from '../store/useStore';
+import { blockSegmentTagId } from '../store/derive';
 import { cn, PROJECT_COLORS } from '../utils/cn';
 import { formatDuration } from '../utils/format';
 import type { ActivityEntry, ManualEntry, TimelineBlock } from '../types';
@@ -40,8 +41,8 @@ function isAggregatedActivityBlock(block: TimelineBlock): boolean {
   return block.type === 'activity' && block.id.startsWith('agg-');
 }
 
-function isBucketBlock(block: TimelineBlock): boolean {
-  return block.type === 'activity' && block.id.startsWith('bkt-');
+function isSegmentBlock(block: TimelineBlock): boolean {
+  return block.type === 'activity' && block.id.startsWith('seg-');
 }
 
 function primaryManualIds(block: TimelineBlock): string[] {
@@ -146,8 +147,6 @@ function rescaleManualTimes(
 }
 
 const BASE_HOUR_HEIGHT = 56;
-const TIMELINE_ZOOM_MIN = 0.5;
-const TIMELINE_ZOOM_MAX = 2.5;
 const TIMELINE_ZOOM_STEP = 0.125;
 const DAY_START = 0;
 const DAY_END = 24;
@@ -173,6 +172,9 @@ export default function Timeline() {
     updateManualEntry,
     deleteActivities,
     deleteManualEntries,
+    refreshDerivedTimeline,
+    timelineZoom,
+    setTimelineZoom,
   } = useStore();
   const [selectedBlock, setSelectedBlock] = useState<TimelineBlock | null>(null);
   const [displayLabelDraft, setDisplayLabelDraft] = useState('');
@@ -181,7 +183,6 @@ export default function Timeline() {
   const [timeEndDraft, setTimeEndDraft] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
-  const [timelineZoom, setTimelineZoom] = useState(1);
   const timelineRef = useRef<HTMLDivElement>(null);
   const hourHeightRef = useRef(BASE_HOUR_HEIGHT);
   const now = new Date();
@@ -206,6 +207,12 @@ export default function Timeline() {
     }
   }, [isToday, selectedDate]);
 
+  useEffect(() => {
+    if (!isToday) return;
+    const t = window.setInterval(() => refreshDerivedTimeline(), 30000);
+    return () => clearInterval(t);
+  }, [isToday, refreshDerivedTimeline]);
+
   const getBlockStyle = (block: TimelineBlock) => {
     const startDate = parseISO(block.startTime);
     const endDate = parseISO(block.endTime);
@@ -221,20 +228,23 @@ export default function Timeline() {
     return (mins / 60) * hourHeight;
   };
 
-  const zoomIn = () =>
-    setTimelineZoom((z) => Math.min(TIMELINE_ZOOM_MAX, Math.round((z + TIMELINE_ZOOM_STEP) * 1000) / 1000));
-  const zoomOut = () =>
-    setTimelineZoom((z) => Math.max(TIMELINE_ZOOM_MIN, Math.round((z - TIMELINE_ZOOM_STEP) * 1000) / 1000));
+  const zoomIn = () => {
+    const z = useStore.getState().timelineZoom;
+    setTimelineZoom(Math.min(TIMELINE_ZOOM_MAX, Math.round((z + TIMELINE_ZOOM_STEP) * 1000) / 1000));
+  };
+  const zoomOut = () => {
+    const z = useStore.getState().timelineZoom;
+    setTimelineZoom(Math.max(TIMELINE_ZOOM_MIN, Math.round((z - TIMELINE_ZOOM_STEP) * 1000) / 1000));
+  };
   const zoomReset = () => setTimelineZoom(1);
 
   const handleTimelineWheel = (e: React.WheelEvent<HTMLDivElement>) => {
     if (!e.ctrlKey && !e.metaKey) return;
     e.preventDefault();
     const delta = e.deltaY > 0 ? -TIMELINE_ZOOM_STEP : TIMELINE_ZOOM_STEP;
-    setTimelineZoom((z) => {
-      const next = Math.round((z + delta) * 1000) / 1000;
-      return Math.min(TIMELINE_ZOOM_MAX, Math.max(TIMELINE_ZOOM_MIN, next));
-    });
+    const z = useStore.getState().timelineZoom;
+    const next = Math.round((z + delta) * 1000) / 1000;
+    setTimelineZoom(Math.min(TIMELINE_ZOOM_MAX, Math.max(TIMELINE_ZOOM_MIN, next)));
   };
 
   const todayCalendarEvents = calendarEvents.filter((e) => {
@@ -451,7 +461,7 @@ export default function Timeline() {
                     const project = projects.find((p) => p.id === block.projectId);
                     const isSelected = selectedBlock?.id === block.id;
                     const isIdle = block.type === 'idle';
-                    const isBucket = isBucketBlock(block);
+                    const isBucket = isSegmentBlock(block);
                     const corp = block.corporationId
                       ? corporations.find((c) => c.id === block.corporationId)
                       : undefined;
@@ -500,7 +510,7 @@ export default function Timeline() {
                             <p className="text-[10px] text-white/40 truncate leading-tight mt-0.5">
                               {isBucket
                                 ? taskLabel ||
-                                  `${block.bucketActivities?.length ?? 0} activities`
+                                  `${(block.segmentActivities ?? block.bucketActivities)?.length ?? 0} activities`
                                 : block.windowTitle}
                             </p>
                           )}
@@ -587,8 +597,8 @@ export default function Timeline() {
                     <p className="text-white/40 text-[10px] uppercase tracking-wider mb-1">
                       {primaryManualIds(selectedBlock).length > 0
                         ? 'Entry type'
-                        : isBucketBlock(selectedBlock)
-                          ? '15-min block'
+                        : isSegmentBlock(selectedBlock)
+                          ? 'Task segment'
                           : isAggregatedActivityBlock(selectedBlock)
                             ? 'Session'
                             : 'Application'}
@@ -598,7 +608,7 @@ export default function Timeline() {
                         ? selectedBlock.type === 'calendar'
                           ? 'Calendar entry'
                           : 'Manual entry'
-                        : isBucketBlock(selectedBlock)
+                        : isSegmentBlock(selectedBlock)
                           ? `${format(parseISO(selectedBlock.startTime), 'HH:mm')} – ${format(parseISO(selectedBlock.endTime), 'HH:mm')}`
                           : isAggregatedActivityBlock(selectedBlock)
                             ? 'Automatic tracking (merged)'
@@ -606,7 +616,7 @@ export default function Timeline() {
                     </p>
                   </div>
 
-                  {isBucketBlock(selectedBlock) && (
+                  {isSegmentBlock(selectedBlock) && (
                     <BucketDetailSection
                       block={selectedBlock}
                       activities={activities}
@@ -617,7 +627,7 @@ export default function Timeline() {
                     />
                   )}
 
-                  {primaryActivityIds(selectedBlock).length > 0 && !isBucketBlock(selectedBlock) && (
+                  {primaryActivityIds(selectedBlock).length > 0 && !isSegmentBlock(selectedBlock) && (
                     <div>
                       <p className="text-white/40 text-[10px] uppercase tracking-wider mb-1">Name</p>
                       <input
@@ -666,7 +676,7 @@ export default function Timeline() {
 
                   {selectedBlock.windowTitle &&
                     primaryManualIds(selectedBlock).length === 0 &&
-                    !isBucketBlock(selectedBlock) && (
+                    !isSegmentBlock(selectedBlock) && (
                     <div>
                       <p className="text-white/40 text-[10px] uppercase tracking-wider mb-1">Window / Document</p>
                       <p className="text-white/70 text-[11px] break-words">{selectedBlock.windowTitle}</p>
@@ -675,7 +685,7 @@ export default function Timeline() {
 
                   {(primaryActivityIds(selectedBlock).length > 0 ||
                     primaryManualIds(selectedBlock).length > 0) &&
-                    !isBucketBlock(selectedBlock) && (
+                    !isSegmentBlock(selectedBlock) && (
                     <div className="space-y-2">
                       <p className="text-white/40 text-[10px] uppercase tracking-wider">Time</p>
                       <input
@@ -736,7 +746,7 @@ export default function Timeline() {
 
                   {(primaryActivityIds(selectedBlock).length > 0 ||
                     primaryManualIds(selectedBlock).length > 0) &&
-                    !isBucketBlock(selectedBlock) && (
+                    !isSegmentBlock(selectedBlock) && (
                     <div>
                       <p className="text-white/40 text-[10px] uppercase tracking-wider mb-2">Assign to Project</p>
                       {selectedBlock.projectId && (
@@ -796,7 +806,7 @@ export default function Timeline() {
 
                   {(primaryActivityIds(selectedBlock).length > 0 ||
                     primaryManualIds(selectedBlock).length > 0) &&
-                    !isBucketBlock(selectedBlock) && (
+                    !isSegmentBlock(selectedBlock) && (
                     <div className="pt-2 border-t border-white/[0.06]">
                       {!deleteConfirm ? (
                         <button
@@ -992,18 +1002,20 @@ function BucketDetailSection({
     () => format(parseISO(block.startTime), 'yyyy-MM-dd'),
     [block.startTime]
   );
+  const segmentId = block.id.startsWith('seg-') ? block.id.slice(4) : undefined;
   const tagBucketRef = useMemo(
     () => ({
-      id: `${block.startTime}|${block.endTime}`,
+      id: segmentId ? blockSegmentTagId(segmentId) : `${block.startTime}|${block.endTime}`,
       bucketDate,
       bucketStart: block.startTime,
       bucketEnd: block.endTime,
+      segmentId,
     }),
-    [bucketDate, block.startTime, block.endTime]
+    [bucketDate, block.startTime, block.endTime, block.id]
   );
 
   const contributions = useMemo(() => {
-    const list = block.bucketActivities ?? [];
+    const list = block.segmentActivities ?? block.bucketActivities ?? [];
     return list
       .map((c) => {
         const a = activities.find((x) => x.id === c.activityId);
@@ -1011,7 +1023,7 @@ function BucketDetailSection({
       })
       .filter((x): x is { activity: ActivityEntry; secs: number } => Boolean(x))
       .sort((a, b) => b.secs - a.secs);
-  }, [block.bucketActivities, activities]);
+  }, [block.segmentActivities, block.bucketActivities, activities]);
 
   const selectedTaskOpt = getTaskTypeOption(block.taskType);
   const isOther = block.taskType === OTHER_TASK_SLUG;
@@ -1023,10 +1035,16 @@ function BucketDetailSection({
   const handleAddCorp = () => {
     const name = newCorpDraft.trim();
     if (!name) return;
-    const corp = addCorporation(name);
-    setNewCorpDraft('');
-    setShowAddCorp(false);
-    setBlockTag(tagBucketRef, { corporationId: corp.id });
+    void (async () => {
+      try {
+        const corp = await addCorporation(name);
+        setNewCorpDraft('');
+        setShowAddCorp(false);
+        setBlockTag(tagBucketRef, { corporationId: corp.id });
+      } catch {
+        // keep draft so user can retry; persist failed
+      }
+    })();
   };
 
   const handleSelectTask = (slug: string) => {
@@ -1053,7 +1071,7 @@ function BucketDetailSection({
     <>
       <div>
         <p className="text-white/40 text-[10px] uppercase tracking-wider mb-1">
-          Activities in this 15 min ({contributions.length})
+          Activities in this task ({contributions.length})
         </p>
         {contributions.length === 0 ? (
           <p className="text-white/40 text-[11px]">No tracked activities.</p>
@@ -1228,7 +1246,7 @@ function BucketDetailSection({
 
       {!isFullyTagged && (
         <p className="text-white/30 text-[10px] leading-snug">
-          Pick a corporation and a task type to mark this 15-minute slot as logged.
+          Pick a corporation and a task type to mark this task segment as logged.
         </p>
       )}
     </>

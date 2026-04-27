@@ -1,5 +1,7 @@
 import { useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useAutomaticTracking } from './useAutomaticTracking';
+import { useTaskCheckInScheduler } from './useTaskCheckInScheduler';
 import { useStore } from './store/useStore';
 import Sidebar from './components/Sidebar';
 import Dashboard from './components/Dashboard';
@@ -7,11 +9,15 @@ import Timeline from './components/Timeline';
 import Review from './components/Review';
 import Projects from './components/Projects';
 import Reports from './components/Reports';
+import TaskCheckInPanel from './components/TaskCheckInPanel';
 
 export default function App() {
+  const [searchParams] = useSearchParams();
+  const isCheckIn = searchParams.has('checkin');
   const { currentView, tickTimers, hydrate } = useStore();
 
-  useAutomaticTracking();
+  useTaskCheckInScheduler(!isCheckIn);
+  useAutomaticTracking(!isCheckIn);
 
   // Tick all active timers every second
   useEffect(() => {
@@ -22,6 +28,10 @@ export default function App() {
   useEffect(() => {
     void hydrate();
   }, [hydrate]);
+
+  if (isCheckIn) {
+    return <TaskCheckInPanel />;
+  }
 
   const renderView = () => {
     switch (currentView) {

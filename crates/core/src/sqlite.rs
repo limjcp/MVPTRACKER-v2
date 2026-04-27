@@ -82,6 +82,16 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
       FOREIGN KEY(corporation_id) REFERENCES corporations(id) ON DELETE SET NULL
     );
     CREATE INDEX IF NOT EXISTS idx_block_tags_date ON block_tags(bucket_date);
+
+    CREATE TABLE IF NOT EXISTS task_segments (
+      id TEXT PRIMARY KEY NOT NULL,
+      start_time TEXT NOT NULL,
+      end_time TEXT,
+      title TEXT,
+      created_at TEXT NOT NULL,
+      last_prompt_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_task_segments_start ON task_segments(start_time);
   "#,
   )?;
   add_schema_columns(conn)?;
@@ -96,6 +106,7 @@ fn add_schema_columns(conn: &Connection) -> rusqlite::Result<()> {
   );
   let _ = conn.execute("ALTER TABLE projects ADD COLUMN team_label TEXT", []);
   let _ = conn.execute("ALTER TABLE activities ADD COLUMN display_label TEXT", []);
+  let _ = conn.execute("ALTER TABLE block_tags ADD COLUMN segment_id TEXT", []);
   Ok(())
 }
 
@@ -380,6 +391,8 @@ pub fn delete_manual_entry(conn: &Connection, id: &str) -> rusqlite::Result<()> 
 pub struct CorporationRow {
   pub id: String,
   pub name: String,
+  /// Accepts `created_at` or `createdAt` from the webview payload.
+  #[serde(alias = "createdAt")]
   pub created_at: String,
 }
 
@@ -425,16 +438,22 @@ pub struct BlockTagRow {
   pub bucket_date: String,
   pub bucket_start: String,
   pub bucket_end: String,
+  #[serde(default, alias = "corporationId")]
   pub corporation_id: Option<String>,
+  #[serde(default, alias = "taskType")]
   pub task_type: Option<String>,
+  #[serde(default, alias = "taskTypeDetail")]
   pub task_type_detail: Option<String>,
   pub updated_at: String,
+  #[serde(default, alias = "segmentId")]
+  pub segment_id: Option<String>,
 }
 
 pub fn list_block_tags(conn: &Connection) -> rusqlite::Result<Vec<BlockTagRow>> {
   let mut stmt = conn.prepare(
     r#"
-    SELECT id, bucket_date, bucket_start, bucket_end, corporation_id, task_type, task_type_detail, updated_at
+    SELECT id, bucket_date, bucket_start, bucket_end, corporation_id, task_type, task_type_detail, updated_at,
+           segment_id
     FROM block_tags
     ORDER BY bucket_start ASC
   "#,
@@ -449,6 +468,7 @@ pub fn list_block_tags(conn: &Connection) -> rusqlite::Result<Vec<BlockTagRow>> 
       task_type: r.get(5)?,
       task_type_detail: r.get(6)?,
       updated_at: r.get(7)?,
+      segment_id: r.get::<_, Option<String>>(8)?,
     })
   })?;
   rows.collect()
@@ -457,8 +477,8 @@ pub fn list_block_tags(conn: &Connection) -> rusqlite::Result<Vec<BlockTagRow>> 
 pub fn set_block_tag(conn: &Connection, t: &BlockTagRow) -> rusqlite::Result<()> {
   conn.execute(
     r#"
-    INSERT INTO block_tags (id, bucket_date, bucket_start, bucket_end, corporation_id, task_type, task_type_detail, updated_at)
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+    INSERT INTO block_tags (id, bucket_date, bucket_start, bucket_end, corporation_id, task_type, task_type_detail, updated_at, segment_id)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
     ON CONFLICT(id) DO UPDATE SET
       bucket_date = excluded.bucket_date,
       bucket_start = excluded.bucket_start,
@@ -466,7 +486,8 @@ pub fn set_block_tag(conn: &Connection, t: &BlockTagRow) -> rusqlite::Result<()>
       corporation_id = excluded.corporation_id,
       task_type = excluded.task_type,
       task_type_detail = excluded.task_type_detail,
-      updated_at = excluded.updated_at
+      updated_at = excluded.updated_at,
+      segment_id = excluded.segment_id
   "#,
     params![
       t.id,
@@ -476,7 +497,8 @@ pub fn set_block_tag(conn: &Connection, t: &BlockTagRow) -> rusqlite::Result<()>
       t.corporation_id,
       t.task_type,
       t.task_type_detail,
-      t.updated_at
+      t.updated_at,
+      t.segment_id
     ],
   )?;
   Ok(())
@@ -485,5 +507,118 @@ pub fn set_block_tag(conn: &Connection, t: &BlockTagRow) -> rusqlite::Result<()>
 pub fn clear_block_tag(conn: &Connection, id: &str) -> rusqlite::Result<()> {
   conn.execute("DELETE FROM block_tags WHERE id = ?1", params![id])?;
   Ok(())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskSegmentRow {
+  pub id: String,
+  pub start_time: String,
+  pub end_time: Option<String>,
+  pub title: Option<String>,
+  pub created_at: String,
+  pub last_prompt_at: Option<String>,
+}
+
+pub fn list_task_segments(conn: &Connection) -> rusqlite::Result<Vec<TaskSegmentRow>> {
+  let mut stmt = conn.prepare(
+    r#"
+    SELECT id, start_time, end_time, title, created_at, last_prompt_at
+    FROM task_segments
+    ORDER BY start_time ASC
+  "#,
+  )?;
+  let rows = stmt.query_map([], |r| {
+    Ok(TaskSegmentRow {
+      id: r.get(0)?,
+      start_time: r.get(1)?,
+      end_time: r.get(2)?,
+      title: r.get(3)?,
+      created_at: r.get(4)?,
+      last_prompt_at: r.get(5)?,
+    })
+  })?;
+  rows.collect()
+}
+
+pub fn upsert_task_segment(conn: &Connection, s: &TaskSegmentRow) -> rusqlite::Result<()> {
+  conn.execute(
+    r#"
+    INSERT INTO task_segments (id, start_time, end_time, title, created_at, last_prompt_at)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+    ON CONFLICT(id) DO UPDATE SET
+      start_time = excluded.start_time,
+      end_time = excluded.end_time,
+      title = excluded.title,
+      last_prompt_at = excluded.last_prompt_at
+  "#,
+    params![
+      s.id,
+      s.start_time,
+      s.end_time,
+      s.title,
+      s.created_at,
+      s.last_prompt_at
+    ],
+  )?;
+  Ok(())
+}
+
+pub fn get_open_task_segment(conn: &Connection) -> rusqlite::Result<Option<TaskSegmentRow>> {
+  let mut stmt = conn.prepare(
+    r#"
+    SELECT id, start_time, end_time, title, created_at, last_prompt_at
+    FROM task_segments
+    WHERE end_time IS NULL
+    ORDER BY start_time DESC
+    LIMIT 1
+  "#,
+  )?;
+  let mut rows = stmt.query([])?;
+  if let Some(r) = rows.next()? {
+    Ok(Some(TaskSegmentRow {
+      id: r.get(0)?,
+      start_time: r.get(1)?,
+      end_time: r.get(2)?,
+      title: r.get(3)?,
+      created_at: r.get(4)?,
+      last_prompt_at: r.get(5)?,
+    }))
+  } else {
+    Ok(None)
+  }
+}
+
+/// Sets end_time on the open segment (must be exactly one open row for predictable behavior).
+pub fn close_task_segment(conn: &Connection, id: &str, end_time: &str) -> rusqlite::Result<()> {
+  conn.execute(
+    "UPDATE task_segments SET end_time = ?2 WHERE id = ?1 AND end_time IS NULL",
+    params![id, end_time],
+  )?;
+  Ok(())
+}
+
+pub fn update_task_segment_prompt(conn: &Connection, id: &str, last_prompt_at: &str) -> rusqlite::Result<()> {
+  conn.execute(
+    "UPDATE task_segments SET last_prompt_at = ?2 WHERE id = ?1 AND end_time IS NULL",
+    params![id, last_prompt_at],
+  )?;
+  Ok(())
+}
+
+/// Creates an open segment when none exists; returns the current open segment.
+pub fn ensure_open_task_segment(conn: &Connection, new_id: &str, now_iso: &str) -> rusqlite::Result<TaskSegmentRow> {
+  if let Some(s) = get_open_task_segment(conn)? {
+    return Ok(s);
+  }
+  conn.execute(
+    r#"
+    INSERT INTO task_segments (id, start_time, end_time, title, created_at, last_prompt_at)
+    VALUES (?1, ?2, NULL, NULL, ?2, NULL)
+  "#,
+    params![new_id, now_iso],
+  )?;
+  get_open_task_segment(conn)?.ok_or_else(|| {
+    rusqlite::Error::ToSqlConversionFailure("task_segments insert did not leave an open row".into())
+  })
 }
 

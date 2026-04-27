@@ -1,4 +1,4 @@
-import type { AppCategory } from '../types';
+import type { ActivityEntry, AppCategory } from '../types';
 
 /** Display order for filters and grouped views. */
 export const APP_CATEGORY_ORDER: AppCategory[] = [
@@ -443,4 +443,29 @@ export function inferAppCategory(appName: string, windowTitle = ''): AppCategory
   }
 
   return 'other';
+}
+
+/** Categories treated as work time when per-activity productivity was never set (stored as 0). */
+const PRODUCTIVE_CATEGORIES = new Set<AppCategory>([
+  'office',
+  'ide',
+  'editor',
+  'productivity',
+  'graphics',
+  'reading',
+]);
+
+const UNPRODUCTIVE_CATEGORIES = new Set<AppCategory>(['media']);
+
+/** Default -1 / 0 / +1 from app category for stats when activity rows still have `productivity: 0`. */
+export function inferProductivityFromCategory(category: AppCategory): -1 | 0 | 1 {
+  if (PRODUCTIVE_CATEGORIES.has(category)) return 1;
+  if (UNPRODUCTIVE_CATEGORIES.has(category)) return -1;
+  return 0;
+}
+
+/** Explicit productivity wins; otherwise infer from category (legacy automatic tracking). */
+export function effectiveActivityProductivity(a: Pick<ActivityEntry, 'productivity' | 'category'>): number {
+  if (a.productivity !== 0) return a.productivity;
+  return inferProductivityFromCategory(a.category);
 }

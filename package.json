@@ -10,8 +10,9 @@
     "dev": "npm run dev -w @mvptracker/desktop",
     "build": "npm run build -w @mvptracker/desktop",
     "preview": "npm run preview -w @mvptracker/desktop",
-    "tauri": "cd \"src-tauri/app\" && npx tauri dev",
-    "tauri:build": "cd \"src-tauri/app\" && npx tauri build"
+    "tauri": "cd \"src-tauri/app\" && npx tauri",
+    "tauri:dev": "node scripts/tauri-dev.cjs",
+    "tauri:build": "node scripts/tauri-build.cjs"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.8",

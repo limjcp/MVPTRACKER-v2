@@ -1,5 +1,5 @@
 /**
- * Canonical list of task types shown in the 15-min bucket detail panel.
+ * Canonical list of task types shown in the task-segment detail panel.
  * `requiresDetail` triggers a secondary text input (e.g., department).
  * `'other'` is appended at the picker level so users can free-type unlisted work.
  */

@@ -3,10 +3,18 @@
   "identifier": "default",
   "description": "enables the default permissions",
   "windows": [
-    "main"
+    "main",
+    "task-checkin"
   ],
   "permissions": [
     "core:default",
-    "dialog:default"
+    "dialog:default",
+    "core:webview:allow-create-webview-window",
+    "core:window:allow-close",
+    "core:window:allow-destroy",
+    "core:window:allow-set-closable",
+    "core:window:allow-set-minimizable",
+    "core:window:allow-set-maximizable",
+    "core:window:allow-set-position"
   ]
 }

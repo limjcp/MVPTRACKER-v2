@@ -96,6 +96,8 @@ export interface DailyStats {
   totalTime: number;
   productiveTime: number;
   unproductiveTime: number;
+  /** Seconds with no foreground tracking between slices (gaps ≥ idle threshold), plus trailing gap today. */
+  idleTime: number;
   productivityScore: number;
   projects: Record<string, number>;
 }
@@ -140,9 +142,11 @@ export interface TimelineBlock {
   type: 'activity' | 'idle' | 'manual' | 'calendar';
   /** When merged for display, underlying activity/manual ids (no prefixes). */
   sourceIds?: string[];
-  /** Populated only for 15-min bucket blocks (`bkt-` prefix). */
+  /** Populated for task-segment blocks (`seg-` prefix): activity slices overlapping the segment. */
+  segmentActivities?: BucketActivityContribution[];
+  /** @deprecated use segmentActivities */
   bucketActivities?: BucketActivityContribution[];
-  /** Tagging state, joined from `block_tags` for bucket blocks. */
+  /** Tagging state from `block_tags` (segment-tagged blocks). */
   corporationId?: string;
   taskType?: string;
   taskTypeDetail?: string;
@@ -159,8 +163,18 @@ export interface Corporation {
   createdAt: string;
 }
 
+export interface TaskSegment {
+  id: string;
+  startTime: string;
+  /** When null, segment is open and extends to “now” on the current day in the UI. */
+  endTime: string | null;
+  title?: string;
+  createdAt: string;
+  lastPromptAt?: string;
+}
+
 export interface BlockTag {
-  /** Stable id derived from bucket time range: `${bucketStart}|${bucketEnd}`. */
+  /** Stable id: `segmentTag:${segmentId}` for segment tags, or legacy `${bucketStart}|${bucketEnd}`. */
   id: string;
   bucketDate: string;
   bucketStart: string;
@@ -171,5 +185,7 @@ export interface BlockTag {
   /** Free-text fill-in (department for 'communicating_with_other_staff', label for 'other'). */
   taskTypeDetail?: string;
   updatedAt: string;
+  /** When set, tag applies to the task segment with this id (UUID, no `seg-` prefix). */
+  segmentId?: string;
 }
 

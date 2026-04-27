@@ -34,6 +34,10 @@ pub fn run() {
       db_list_block_tags,
       db_set_block_tag,
       db_clear_block_tag,
+      db_list_task_segments,
+      db_ensure_open_task_segment,
+      db_task_checkin_yes,
+      db_task_checkin_no,
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {
@@ -233,4 +237,97 @@ fn db_clear_block_tag(db: tauri::State<'_, DbPath>, id: String) -> Result<(), St
   let conn = mvptracker_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
   mvptracker_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
   mvptracker_core::sqlite::clear_block_tag(&conn, &id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn db_list_task_segments(
+  db: tauri::State<'_, DbPath>,
+) -> Result<Vec<mvptracker_core::sqlite::TaskSegmentRow>, String> {
+  let conn = mvptracker_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
+  mvptracker_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
+  mvptracker_core::sqlite::list_task_segments(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn db_ensure_open_task_segment(
+  db: tauri::State<'_, DbPath>,
+  new_id: String,
+  now_iso: String,
+) -> Result<mvptracker_core::sqlite::TaskSegmentRow, String> {
+  let conn = mvptracker_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
+  mvptracker_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
+  mvptracker_core::sqlite::ensure_open_task_segment(&conn, &new_id, &now_iso).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn db_task_checkin_yes(db: tauri::State<'_, DbPath>, now_iso: String) -> Result<(), String> {
+  let conn = mvptracker_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
+  mvptracker_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
+  let open = mvptracker_core::sqlite::get_open_task_segment(&conn).map_err(|e| e.to_string())?;
+  if let Some(s) = open {
+    mvptracker_core::sqlite::update_task_segment_prompt(&conn, &s.id, &now_iso).map_err(|e| e.to_string())?;
+  }
+  Ok(())
+}
+
+#[tauri::command]
+fn db_task_checkin_no(
+  db: tauri::State<'_, DbPath>,
+  new_segment_id: String,
+  new_title: Option<String>,
+  now_iso: String,
+  tag_corporation_id: Option<String>,
+  tag_task_type: Option<String>,
+  tag_task_type_detail: Option<String>,
+) -> Result<(), String> {
+  fn non_empty(s: Option<String>) -> Option<String> {
+    s.and_then(|v| {
+      let t = v.trim();
+      if t.is_empty() {
+        None
+      } else {
+        Some(t.to_string())
+      }
+    })
+  }
+
+  let conn = mvptracker_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
+  mvptracker_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
+  let open = mvptracker_core::sqlite::get_open_task_segment(&conn).map_err(|e| e.to_string())?;
+  if let Some(s) = open {
+    mvptracker_core::sqlite::close_task_segment(&conn, &s.id, &now_iso).map_err(|e| e.to_string())?;
+  }
+  let row = mvptracker_core::sqlite::TaskSegmentRow {
+    id: new_segment_id.clone(),
+    start_time: now_iso.clone(),
+    end_time: None,
+    title: new_title,
+    created_at: now_iso.clone(),
+    last_prompt_at: None,
+  };
+  mvptracker_core::sqlite::upsert_task_segment(&conn, &row).map_err(|e| e.to_string())?;
+
+  let corp = non_empty(tag_corporation_id);
+  let tt = non_empty(tag_task_type);
+  let ttd = non_empty(tag_task_type_detail);
+  if corp.is_some() || tt.is_some() || ttd.is_some() {
+    let bucket_date = now_iso
+      .get(..10)
+      .map(str::to_string)
+      .unwrap_or_else(|| "1970-01-01".to_string());
+    let tag = mvptracker_core::sqlite::BlockTagRow {
+      id: format!("segmentTag:{}", new_segment_id),
+      bucket_date,
+      bucket_start: now_iso.clone(),
+      bucket_end: now_iso.clone(),
+      corporation_id: corp,
+      task_type: tt,
+      task_type_detail: ttd,
+      updated_at: now_iso.clone(),
+      segment_id: Some(new_segment_id),
+    };
+    mvptracker_core::sqlite::set_block_tag(&conn, &tag).map_err(|e| e.to_string())?;
+  }
+
+  Ok(())
 }

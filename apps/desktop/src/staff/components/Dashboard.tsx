@@ -5,6 +5,7 @@ import {
   Clock,
   Zap,
   Target,
+  Coffee,
   ChevronRight,
   Activity,
   Globe,
@@ -59,13 +60,21 @@ const CATEGORY_ICONS: Record<AppCategory, React.ElementType> = {
 const CATEGORY_COLORS: Record<AppCategory, string> = CATEGORY_HEX;
 
 export default function Dashboard() {
-  const { dailyStats, projects, activities, calendarEvents, setView, recordCalendarEvent } = useStore();
+  const { dailyStats, projects, activities, calendarEvents, setView, recordCalendarEvent, settings, refreshDerivedTimeline } =
+    useStore();
   const [now, setNow] = useState(new Date());
 
   useEffect(() => {
-    const interval = setInterval(() => setNow(new Date()), 60000);
+    refreshDerivedTimeline();
+  }, [refreshDerivedTimeline]);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setNow(new Date());
+      refreshDerivedTimeline();
+    }, 60000);
     return () => clearInterval(interval);
-  }, []);
+  }, [refreshDerivedTimeline]);
 
   const todayKey = format(now, 'yyyy-MM-dd');
   const emptyDay = (date: string): DailyStats => ({
@@ -73,6 +82,7 @@ export default function Dashboard() {
     totalTime: 0,
     productiveTime: 0,
     unproductiveTime: 0,
+    idleTime: 0,
     productivityScore: 0,
     projects: {},
   });
@@ -146,7 +156,7 @@ export default function Dashboard() {
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
         <StatCard
           label="Today's Total"
           value={formatDuration(todayStats?.totalTime || 0)}
@@ -162,6 +172,14 @@ export default function Dashboard() {
           trend="up"
           icon={Zap}
           color="emerald"
+        />
+        <StatCard
+          label="Idle / AFK"
+          value={formatDuration(todayStats?.idleTime || 0)}
+          subValue={`Gaps ≥ ${settings.idleThreshold} min between tracked apps`}
+          trend="neutral"
+          icon={Coffee}
+          color="slate"
         />
         <StatCard
           label="Projects Active"
@@ -430,6 +448,7 @@ function StatCard({ label, value, subValue, trend, icon: Icon, color }: StatCard
     emerald: { bg: 'bg-emerald-500/10', icon: 'text-emerald-400', trend: 'text-emerald-400' },
     purple: { bg: 'bg-purple-500/10', icon: 'text-purple-400', trend: 'text-purple-400' },
     amber: { bg: 'bg-amber-500/10', icon: 'text-amber-400', trend: 'text-amber-400' },
+    slate: { bg: 'bg-slate-500/10', icon: 'text-slate-400', trend: 'text-slate-400' },
   };
   const c = colorMap[color] || colorMap.blue;
 

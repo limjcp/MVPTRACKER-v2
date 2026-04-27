@@ -6,15 +6,14 @@ import type {
   DailyStats,
   ManualEntry,
   Project,
+  TaskSegment,
   TimelineBlock,
 } from '../types';
-import { ACTIVITY_MERGE_GAP_MINUTES } from '../utils/activityMerge';
-import { CATEGORY_HEX } from '../utils/appCategories';
+import { CATEGORY_HEX, effectiveActivityProductivity } from '../utils/appCategories';
 import { PROJECT_COLORS } from '../utils/cn';
+import { formatTaskType } from '../utils/taskTypes';
 
-const AGGREGATE_SESSION_GAP_MS = ACTIVITY_MERGE_GAP_MINUTES * 60 * 1000;
-const BUCKET_DURATION_MS = 15 * 60 * 1000;
-const AGGREGATE_APP_LABEL = 'Activity';
+const TASK_BLOCK_APP = 'Task';
 
 function blockColorForActivity(a: ActivityEntry, projects: Project[]): string {
   if (a.projectId) {
@@ -32,135 +31,168 @@ function blockColorForManual(m: ManualEntry, projects: Project[]): string {
   return '#8B5CF6';
 }
 
-function bucketIdFor(startMs: number, endMs: number): string {
-  return `bkt-${startMs}-${endMs}`;
-}
-
 export function blockTagBucketId(bucketStartIso: string, bucketEndIso: string): string {
   return `${bucketStartIso}|${bucketEndIso}`;
 }
 
-/**
- * Slice automatic activities into rolling 15-minute buckets.
- *
- * Sessions are runs of automatic activities where consecutive rows are no more
- * than `ACTIVITY_MERGE_GAP_MINUTES` apart. Each session anchors its own 15-min
- * cadence at the first activity's start, so the bucket clock restarts after any
- * idle gap > 15 min. Buckets are emitted with fixed 15-min width as long as any
- * activity overlaps the slot; empty slots are skipped.
- */
-function computeFifteenMinuteBuckets(
-  dateStr: string,
-  activities: ActivityEntry[],
-  projects: Project[]
-): TimelineBlock[] {
-  const dayAutomatic = activities
-    .filter((a) => a.type === 'automatic' && format(parseISO(a.startTime), 'yyyy-MM-dd') === dateStr)
-    .sort((a, b) => parseISO(a.startTime).getTime() - parseISO(b.startTime).getTime());
-
-  if (dayAutomatic.length === 0) return [];
-
-  const sessions: ActivityEntry[][] = [];
-  let session: ActivityEntry[] = [];
-  let prevEndMs = 0;
-  for (const a of dayAutomatic) {
-    const s = parseISO(a.startTime).getTime();
-    const e = parseISO(a.endTime).getTime();
-    if (session.length === 0 || s - prevEndMs > AGGREGATE_SESSION_GAP_MS) {
-      if (session.length) sessions.push(session);
-      session = [a];
-    } else {
-      session.push(a);
-    }
-    prevEndMs = Math.max(prevEndMs, e);
-  }
-  if (session.length) sessions.push(session);
-
-  const out: TimelineBlock[] = [];
-
-  for (const sess of sessions) {
-    const anchorMs = parseISO(sess[0]!.startTime).getTime();
-    const sessionEndMs = sess.reduce(
-      (m, a) => Math.max(m, parseISO(a.endTime).getTime()),
-      0
-    );
-    const slotCount = Math.max(1, Math.ceil((sessionEndMs - anchorMs) / BUCKET_DURATION_MS));
-
-    for (let i = 0; i < slotCount; i++) {
-      const startMs = anchorMs + i * BUCKET_DURATION_MS;
-      const endMs = startMs + BUCKET_DURATION_MS;
-
-      const contributions: BucketActivityContribution[] = [];
-      let dominant: ActivityEntry | undefined;
-      let dominantOverlap = 0;
-      const labelSet = new Set<string>();
-      const projectIdSet = new Set<string>();
-
-      for (const a of sess) {
-        const aStart = parseISO(a.startTime).getTime();
-        const aEnd = parseISO(a.endTime).getTime();
-        const overlap = Math.max(0, Math.min(aEnd, endMs) - Math.max(aStart, startMs));
-        if (overlap <= 0) continue;
-        contributions.push({
-          activityId: a.id,
-          durationInBucket: Math.round(overlap / 1000),
-        });
-        if (overlap > dominantOverlap) {
-          dominant = a;
-          dominantOverlap = overlap;
-        }
-        if (a.displayLabel?.trim()) labelSet.add(a.displayLabel.trim());
-        if (a.projectId) projectIdSet.add(a.projectId);
-      }
-
-      if (contributions.length === 0) continue;
-
-      const startTime = new Date(startMs).toISOString();
-      const endTime = new Date(endMs).toISOString();
-      const totalSecs = contributions.reduce((s, c) => s + c.durationInBucket, 0);
-      const displayLabel = labelSet.size === 1 ? [...labelSet][0] : undefined;
-      const projectId = projectIdSet.size === 1 ? [...projectIdSet][0] : undefined;
-      const primary = dominant ?? sess[0]!;
-
-      out.push({
-        id: bucketIdFor(startMs, endMs),
-        startTime,
-        endTime,
-        duration: totalSecs,
-        appName: AGGREGATE_APP_LABEL,
-        windowTitle: '',
-        displayLabel,
-        projectId,
-        color: blockColorForActivity(primary, projects),
-        type: 'activity' as const,
-        sourceIds: contributions.map((c) => c.activityId),
-        bucketActivities: contributions,
-      });
-    }
-  }
-
-  return out;
+/** Stable block_tags row id for a task segment. */
+export function blockSegmentTagId(segmentId: string): string {
+  return `segmentTag:${segmentId}`;
 }
 
-function applyBlockTags(
-  blocks: TimelineBlock[],
-  blockTags: BlockTag[]
+function segmentWallEndMs(s: TaskSegment, nowIso: string): number {
+  if (s.endTime) return parseISO(s.endTime).getTime();
+  return parseISO(nowIso).getTime();
+}
+
+/** Intersects [startMs, endMs] with the calendar day `dateStr` (local midnight bounds). */
+function clipIntervalToDay(
+  startMs: number,
+  endMs: number,
+  dateStr: string
+): { start: number; end: number } | null {
+  const d0 = parseISO(`${dateStr}T00:00:00`).getTime();
+  const d1 = parseISO(`${dateStr}T23:59:59.999`).getTime();
+  const s = Math.max(startMs, d0);
+  const e = Math.min(endMs, d1);
+  if (e <= s) return null;
+  return { start: s, end: e };
+}
+
+/** Screen-time lane: one bar per task segment; underlying apps are not separate timeline blocks. */
+function computeTaskSegmentBlocksForDay(
+  dateStr: string,
+  taskSegments: TaskSegment[],
+  activities: ActivityEntry[],
+  projects: Project[],
+  nowIso: string,
+  blockTags: BlockTag[] = []
 ): TimelineBlock[] {
+  const blocks: TimelineBlock[] = [];
+
+  const tagBySegmentId = new Map<string, BlockTag>();
+  for (const t of blockTags) {
+    if (t.segmentId) tagBySegmentId.set(t.segmentId, t);
+  }
+
+  const segmentsTouchingDay = taskSegments.filter((s) => {
+    const ss = parseISO(s.startTime).getTime();
+    const ee = segmentWallEndMs(s, nowIso);
+    return clipIntervalToDay(ss, ee, dateStr) !== null;
+  });
+
+  if (segmentsTouchingDay.length === 0) {
+    return [];
+  }
+
+  for (const s of segmentsTouchingDay) {
+    const ss = parseISO(s.startTime).getTime();
+    const ee = segmentWallEndMs(s, nowIso);
+    const clip = clipIntervalToDay(ss, ee, dateStr);
+    if (!clip) continue;
+
+    const fullStart = ss;
+    const fullEnd = ee;
+
+    const contributions: BucketActivityContribution[] = [];
+    let dominant: ActivityEntry | undefined;
+    let dominantOverlap = 0;
+    const labelSet = new Set<string>();
+    const projectIdSet = new Set<string>();
+
+    for (const a of activities) {
+      if (a.type !== 'automatic') continue;
+      const aStart = parseISO(a.startTime).getTime();
+      const aEnd = parseISO(a.endTime).getTime();
+      const overlap = Math.max(0, Math.min(aEnd, fullEnd) - Math.max(aStart, fullStart));
+      if (overlap <= 0) continue;
+      contributions.push({
+        activityId: a.id,
+        durationInBucket: Math.round(overlap / 1000),
+      });
+      if (overlap > dominantOverlap) {
+        dominant = a;
+        dominantOverlap = overlap;
+      }
+      if (a.displayLabel?.trim()) labelSet.add(a.displayLabel.trim());
+      if (a.projectId) projectIdSet.add(a.projectId);
+    }
+
+    const startTime = new Date(clip.start).toISOString();
+    const endTime = new Date(clip.end).toISOString();
+    const duration = Math.max(0, differenceInSeconds(parseISO(endTime), parseISO(startTime)));
+    const titleTrim = s.title?.trim();
+    const segTag = tagBySegmentId.get(s.id);
+    const typeFromTag =
+      segTag?.taskType != null && String(segTag.taskType).trim() !== ''
+        ? formatTaskType(segTag.taskType, segTag.taskTypeDetail)
+        : '';
+    const displayLabel =
+      typeFromTag ||
+      titleTrim ||
+      (labelSet.size === 1 ? [...labelSet][0] : undefined) ||
+      'Task';
+    const projectId = projectIdSet.size === 1 ? [...projectIdSet][0] : undefined;
+    const primaryActivity =
+      dominant ??
+      (contributions.length
+        ? activities.find((x) => x.id === contributions[0]!.activityId)
+        : undefined);
+    const color = primaryActivity ? blockColorForActivity(primaryActivity, projects) : '#6B7280';
+
+    blocks.push({
+      id: `seg-${s.id}`,
+      startTime,
+      endTime,
+      duration,
+      appName: TASK_BLOCK_APP,
+      windowTitle: '',
+      displayLabel,
+      projectId,
+      color,
+      type: 'activity' as const,
+      sourceIds: contributions.map((c) => c.activityId),
+      segmentActivities: contributions,
+      bucketActivities: contributions,
+    });
+  }
+
+  return blocks;
+}
+
+function applyBlockTags(blocks: TimelineBlock[], blockTags: BlockTag[]): TimelineBlock[] {
   if (blockTags.length === 0) return blocks;
-  const byId = new Map<string, BlockTag>();
-  for (const t of blockTags) byId.set(t.id, t);
+  const bySegmentId = new Map<string, BlockTag>();
+  const byLegacyBucket = new Map<string, BlockTag>();
+  for (const t of blockTags) {
+    if (t.segmentId) bySegmentId.set(t.segmentId, t);
+    if (!t.segmentId) byLegacyBucket.set(blockTagBucketId(t.bucketStart, t.bucketEnd), t);
+  }
 
   return blocks.map((b) => {
-    if (!b.id.startsWith('bkt-')) return b;
-    const tagId = blockTagBucketId(b.startTime, b.endTime);
-    const tag = byId.get(tagId);
-    if (!tag) return b;
-    return {
-      ...b,
-      corporationId: tag.corporationId,
-      taskType: tag.taskType,
-      taskTypeDetail: tag.taskTypeDetail,
-    };
+    if (b.id.startsWith('seg-')) {
+      const segId = b.id.slice(4);
+      const tag =
+        bySegmentId.get(segId) ?? byLegacyBucket.get(blockTagBucketId(b.startTime, b.endTime));
+      if (!tag) return b;
+      return {
+        ...b,
+        corporationId: tag.corporationId,
+        taskType: tag.taskType,
+        taskTypeDetail: tag.taskTypeDetail,
+      };
+    }
+    if (b.id.startsWith('bkt-')) {
+      const tag = byLegacyBucket.get(blockTagBucketId(b.startTime, b.endTime));
+      if (!tag) return b;
+      return {
+        ...b,
+        corporationId: tag.corporationId,
+        taskType: tag.taskType,
+        taskTypeDetail: tag.taskTypeDetail,
+      };
+    }
+    return b;
   });
 }
 
@@ -169,12 +201,17 @@ export function computeTimelineBlocks(
   activities: ActivityEntry[],
   manualEntries: ManualEntry[],
   projects: Project[],
-  blockTags: BlockTag[] = []
+  blockTags: BlockTag[] = [],
+  taskSegments: TaskSegment[] = [],
+  nowIso: string = new Date().toISOString()
 ): TimelineBlock[] {
   const blocks: TimelineBlock[] = [];
 
-  blocks.push(...computeFifteenMinuteBuckets(dateStr, activities, projects));
+  blocks.push(
+    ...computeTaskSegmentBlocksForDay(dateStr, taskSegments, activities, projects, nowIso, blockTags)
+  );
 
+  // Per-app automatic tracking is folded into `seg-*` blocks only — no separate `act-*` rows.
   for (const a of activities) {
     if (format(parseISO(a.startTime), 'yyyy-MM-dd') !== dateStr) continue;
     if (a.type === 'automatic') continue;
@@ -266,7 +303,7 @@ function mergeComponentGroup(
 
 /**
  * Merges overlapping timeline intervals within the same block type so the lane is single-column.
- * Underlying activities/manual rows stay in the store; `sourceIds` lists contributors.
+ * Task segment blocks (`seg-`) stay separate (carry segmentActivities / tags).
  */
 export function mergeOverlappingTimelineBlocks(
   blocks: TimelineBlock[],
@@ -278,13 +315,10 @@ export function mergeOverlappingTimelineBlocks(
   const activityById = new Map(activities.map((a) => [a.id, a]));
   const manualById = new Map(manualEntries.map((m) => [m.id, m]));
 
-  // 15-min bucket blocks are disjoint and carry their own `bucketActivities`
-  // payload; never merge them with other blocks (would lose the per-activity
-  // contribution data and the stable bucket id used by block_tags).
   const passthrough: TimelineBlock[] = [];
   const mergeable: TimelineBlock[] = [];
   for (const b of blocks) {
-    if (b.id.startsWith('bkt-')) passthrough.push(b);
+    if (b.id.startsWith('bkt-') || b.id.startsWith('seg-')) passthrough.push(b);
     else mergeable.push(b);
   }
 
@@ -339,11 +373,42 @@ export function mergeOverlappingTimelineBlocks(
   );
 }
 
+/** Gaps between automatic slices (and trailing gap on anchor day) counted as idle when ≥ threshold. */
+function computeIdleSecondsForDay(
+  dateStr: string,
+  activities: ActivityEntry[],
+  idleThresholdMinutes: number,
+  anchorDate: Date
+): number {
+  const thresholdSec = Math.max(0, idleThresholdMinutes) * 60;
+  const auto = activities
+    .filter((a) => a.type === 'automatic' && format(parseISO(a.startTime), 'yyyy-MM-dd') === dateStr)
+    .sort((a, b) => parseISO(a.startTime).getTime() - parseISO(b.startTime).getTime());
+
+  let idle = 0;
+  for (let i = 0; i < auto.length - 1; i++) {
+    const end = parseISO(auto[i]!.endTime).getTime();
+    const nextStart = parseISO(auto[i + 1]!.startTime).getTime();
+    const gapSec = Math.max(0, Math.round((nextStart - end) / 1000));
+    if (gapSec >= thresholdSec) idle += gapSec;
+  }
+
+  const todayStr = format(anchorDate, 'yyyy-MM-dd');
+  if (dateStr === todayStr && auto.length > 0) {
+    const lastEnd = parseISO(auto[auto.length - 1]!.endTime).getTime();
+    const tailSec = Math.max(0, Math.round((anchorDate.getTime() - lastEnd) / 1000));
+    if (tailSec >= thresholdSec) idle += tailSec;
+  }
+
+  return idle;
+}
+
 export function computeDailyStats(
   activities: ActivityEntry[],
   manualEntries: ManualEntry[],
   days: number,
-  anchorDate: Date
+  anchorDate: Date,
+  idleThresholdMinutes: number = 2
 ): DailyStats[] {
   const out: DailyStats[] = [];
   for (let i = days - 1; i >= 0; i--) {
@@ -363,8 +428,9 @@ export function computeDailyStats(
     for (const a of activities) {
       if (format(parseISO(a.startTime), 'yyyy-MM-dd') !== dateStr) continue;
       totalTime += a.duration;
-      if (a.productivity > 0) productiveTime += a.duration;
-      else if (a.productivity < 0) unproductiveTime += a.duration;
+      const p = effectiveActivityProductivity(a);
+      if (p > 0) productiveTime += a.duration;
+      else if (p < 0) unproductiveTime += a.duration;
       addProjectTime(a.projectId, a.duration);
     }
 
@@ -379,11 +445,14 @@ export function computeDailyStats(
     const productivityScore =
       denom > 0 ? Math.round((productiveTime / denom) * 100) : totalTime > 0 ? 50 : 0;
 
+    const idleTime = computeIdleSecondsForDay(dateStr, activities, idleThresholdMinutes, anchorDate);
+
     out.push({
       date: dateStr,
       totalTime,
       productiveTime,
       unproductiveTime,
+      idleTime,
       productivityScore,
       projects: projectSeconds,
     });
