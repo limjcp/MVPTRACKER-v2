@@ -174,7 +174,7 @@ export default function Dashboard() {
         <StatCard
           label="Billable Hours"
           value={formatDuration(todayActivities.filter((a) => a.projectId).reduce((s, a) => s + a.duration, 0))}
-          subValue={`$${(todayActivities.filter((a) => a.projectId).reduce((s, a) => s + a.duration, 0) / 3600 * 150).toFixed(0)} est.`}
+          subValue={`$${(todayActivities.filter((a) => a.projectId).reduce((s, a) => s + a.duration, 0) / 3600 * 0).toFixed(0)} est.`}
           trend="up"
           icon={TrendingUp}
           color="amber"

@@ -14,6 +14,8 @@
     "tauri:build": "cd \"src-tauri/app\" && npx tauri build"
   },
   "dependencies": {
+    "@fontsource-variable/inter": "^5.2.8",
+    "@fontsource/jetbrains-mono": "^5.2.8",
     "@supabase/supabase-js": "^2.104.1",
     "@tauri-apps/api": "^2.10.1",
     "clsx": "2.1.1",
@@ -21,6 +23,7 @@
     "jspdf": "^2.5.2",
     "jspdf-autotable": "^3.8.4",
     "lucide-react": "^1.9.0",
+    "motion": "^12.38.0",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-router-dom": "^7.9.6",

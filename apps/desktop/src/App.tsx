@@ -6,24 +6,26 @@ import StaffRoot from './staff/App';
 
 export default function App() {
   return (
-    <Routes>
-      <Route path="/" element={<LoginPage />} />
-      <Route
-        path="/staff"
-        element={
-          <ProtectedRoute>
-            <StaffRoot />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/admin"
-        element={
-          <ProtectedRoute>
-            <AdminRoot />
-          </ProtectedRoute>
-        }
-      />
-    </Routes>
+    <div className="flex min-h-dvh w-full flex-1 flex-col">
+      <Routes>
+        <Route path="/" element={<LoginPage />} />
+        <Route
+          path="/staff"
+          element={
+            <ProtectedRoute>
+              <StaffRoot />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin"
+          element={
+            <ProtectedRoute>
+              <AdminRoot />
+            </ProtectedRoute>
+          }
+        />
+      </Routes>
+    </div>
   );
 }
