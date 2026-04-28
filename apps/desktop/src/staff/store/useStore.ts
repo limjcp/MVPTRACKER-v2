@@ -416,6 +416,7 @@ export const useStore = create<AppState>((set, get) => ({
     await invoke('db_ensure_open_task_segment', {
       newId: ensureSegId,
       nowIso: new Date().toISOString(),
+      maxGapSeconds: 5 * 60,
     });
     const segmentRows = await invoke<any[]>('db_list_task_segments');
     const taskSegments = segmentRows.map(fromTaskSegmentRow);

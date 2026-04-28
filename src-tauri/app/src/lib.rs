@@ -253,10 +253,13 @@ fn db_ensure_open_task_segment(
   db: tauri::State<'_, DbPath>,
   new_id: String,
   now_iso: String,
+  max_gap_seconds: Option<u64>,
 ) -> Result<mvptracker_core::sqlite::TaskSegmentRow, String> {
   let conn = mvptracker_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
   mvptracker_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::ensure_open_task_segment(&conn, &new_id, &now_iso).map_err(|e| e.to_string())
+  let max_gap_seconds = max_gap_seconds.unwrap_or(5 * 60);
+  mvptracker_core::sqlite::ensure_open_task_segment(&conn, &new_id, &now_iso, max_gap_seconds)
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

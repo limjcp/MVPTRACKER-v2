@@ -1,6 +1,7 @@
 use rusqlite::{params, Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use chrono::{DateTime, Duration, FixedOffset};
 
 pub fn open_db(path: &Path) -> rusqlite::Result<Connection> {
   Connection::open_with_flags(
@@ -606,10 +607,48 @@ pub fn update_task_segment_prompt(conn: &Connection, id: &str, last_prompt_at: &
 }
 
 /// Creates an open segment when none exists; returns the current open segment.
-pub fn ensure_open_task_segment(conn: &Connection, new_id: &str, now_iso: &str) -> rusqlite::Result<TaskSegmentRow> {
-  if let Some(s) = get_open_task_segment(conn)? {
-    return Ok(s);
+pub fn ensure_open_task_segment(
+  conn: &Connection,
+  new_id: &str,
+  now_iso: &str,
+  max_gap_seconds: u64,
+) -> rusqlite::Result<TaskSegmentRow> {
+  fn parse_rfc3339(iso: &str) -> Option<DateTime<FixedOffset>> {
+    DateTime::parse_from_rfc3339(iso).ok()
   }
+
+  if let Some(open) = get_open_task_segment(conn)? {
+    // Guard against “bridging” app downtime: if the app wasn’t active recently,
+    // close the old open segment and start a new one at now.
+    let now_dt = parse_rfc3339(now_iso);
+    let anchor_iso = open
+      .last_prompt_at
+      .as_deref()
+      .unwrap_or(open.start_time.as_str());
+    let anchor_dt = parse_rfc3339(anchor_iso);
+    if let (Some(now_dt), Some(anchor_dt)) = (now_dt, anchor_dt) {
+      let gap = now_dt.signed_duration_since(anchor_dt);
+      if gap > Duration::seconds(max_gap_seconds as i64) {
+        let close_dt = std::cmp::min(now_dt, anchor_dt + Duration::seconds(60));
+        let close_iso = close_dt.to_rfc3339();
+        close_task_segment(conn, &open.id, &close_iso)?;
+
+        let row = TaskSegmentRow {
+          id: new_id.to_string(),
+          start_time: now_iso.to_string(),
+          end_time: None,
+          title: None,
+          created_at: now_iso.to_string(),
+          last_prompt_at: None,
+        };
+        upsert_task_segment(conn, &row)?;
+        return Ok(row);
+      }
+    }
+
+    return Ok(open);
+  }
+
   conn.execute(
     r#"
     INSERT INTO task_segments (id, start_time, end_time, title, created_at, last_prompt_at)
@@ -620,5 +659,64 @@ pub fn ensure_open_task_segment(conn: &Connection, new_id: &str, now_iso: &str) 
   get_open_task_segment(conn)?.ok_or_else(|| {
     rusqlite::Error::ToSqlConversionFailure("task_segments insert did not leave an open row".into())
   })
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn ensure_open_task_segment_splits_stale_open_segment() {
+    let conn = Connection::open_in_memory().unwrap();
+    migrate(&conn).unwrap();
+
+    let old = TaskSegmentRow {
+      id: "old".to_string(),
+      start_time: "2026-04-27T10:00:00+00:00".to_string(),
+      end_time: None,
+      title: None,
+      created_at: "2026-04-27T10:00:00+00:00".to_string(),
+      last_prompt_at: Some("2026-04-27T10:05:00+00:00".to_string()),
+    };
+    upsert_task_segment(&conn, &old).unwrap();
+
+    let now = "2026-04-28T10:00:00+00:00";
+    let created = ensure_open_task_segment(&conn, "new", now, 5 * 60).unwrap();
+    assert_eq!(created.id, "new");
+    assert_eq!(created.start_time, now);
+    assert!(created.end_time.is_none());
+
+    // Old should be closed and no longer returned as open.
+    let open = get_open_task_segment(&conn).unwrap().unwrap();
+    assert_eq!(open.id, "new");
+
+    // Verify old row end_time was set.
+    let mut stmt = conn
+      .prepare("SELECT end_time FROM task_segments WHERE id = ?1")
+      .unwrap();
+    let end_time: Option<String> = stmt.query_row(params!["old"], |r| r.get(0)).unwrap();
+    assert!(end_time.is_some());
+  }
+
+  #[test]
+  fn ensure_open_task_segment_keeps_recent_open_segment() {
+    let conn = Connection::open_in_memory().unwrap();
+    migrate(&conn).unwrap();
+
+    let open = TaskSegmentRow {
+      id: "old".to_string(),
+      start_time: "2026-04-28T10:00:00+00:00".to_string(),
+      end_time: None,
+      title: None,
+      created_at: "2026-04-28T10:00:00+00:00".to_string(),
+      last_prompt_at: Some("2026-04-28T10:04:30+00:00".to_string()),
+    };
+    upsert_task_segment(&conn, &open).unwrap();
+
+    let now = "2026-04-28T10:05:00+00:00";
+    let kept = ensure_open_task_segment(&conn, "new", now, 5 * 60).unwrap();
+    assert_eq!(kept.id, "old");
+    assert!(kept.end_time.is_none());
+  }
 }
 
