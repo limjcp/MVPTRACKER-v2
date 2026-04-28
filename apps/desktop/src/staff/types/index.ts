@@ -91,6 +91,24 @@ export type AppCategory =
   | 'system'
   | 'other';
 
+/** Populated only for the anchor calendar day in `computeDailyStats` (e.g. “today” when anchor is now). */
+export interface DayOverlapDiagnostic {
+  /** Sum of per-row clipped lengths (double-counts wall clock when intervals overlap). */
+  sumRawClippedSeconds: number;
+  /** Union length of overlapping intervals (matches `totalTime`). */
+  unionTotalSeconds: number;
+  /** `sumRawClippedSeconds - unionTotalSeconds` (how much raw sums overstated wall time). */
+  doubleCountedSeconds: number;
+  /** Pairs of rows with positive overlap, largest first (capped). */
+  pairs: Array<{
+    overlapSec: number;
+    aId: string;
+    bId: string;
+    aLabel: string;
+    bLabel: string;
+  }>;
+}
+
 export interface DailyStats {
   date: string;
   totalTime: number;
@@ -100,6 +118,8 @@ export interface DailyStats {
   idleTime: number;
   productivityScore: number;
   projects: Record<string, number>;
+  /** Only set for the stats row matching the anchor date (dashboard “today” debug). */
+  overlapDiagnostics?: DayOverlapDiagnostic;
 }
 
 export interface ActiveTimer {

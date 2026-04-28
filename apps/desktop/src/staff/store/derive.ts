@@ -4,6 +4,7 @@ import type {
   BlockTag,
   BucketActivityContribution,
   DailyStats,
+  DayOverlapDiagnostic,
   ManualEntry,
   Project,
   TaskSegment,
@@ -403,6 +404,138 @@ function computeIdleSecondsForDay(
   return idle;
 }
 
+type ClippedDayRow = {
+  id: string;
+  label: string;
+  startMs: number;
+  endMs: number;
+  prod: number;
+  projectId?: string;
+};
+
+function gatherClippedRowsForDay(
+  dateStr: string,
+  activities: ActivityEntry[],
+  manualEntries: ManualEntry[]
+): ClippedDayRow[] {
+  const out: ClippedDayRow[] = [];
+
+  for (const a of activities) {
+    const s = parseISO(a.startTime).getTime();
+    const e = parseISO(a.endTime).getTime();
+    const clip = clipIntervalToDay(s, e, dateStr);
+    if (!clip) continue;
+    out.push({
+      id: a.id,
+      label: a.appName,
+      startMs: clip.start,
+      endMs: clip.end,
+      prod: effectiveActivityProductivity(a),
+      projectId: a.projectId,
+    });
+  }
+
+  for (const m of manualEntries) {
+    const s = parseISO(m.startTime).getTime();
+    const e = parseISO(m.endTime).getTime();
+    const clip = clipIntervalToDay(s, e, dateStr);
+    if (!clip) continue;
+    out.push({
+      id: `man:${m.id}`,
+      label: `Manual · ${m.title}`,
+      startMs: clip.start,
+      endMs: clip.end,
+      prod: 1,
+      projectId: m.projectId,
+    });
+  }
+
+  return out;
+}
+
+/** Per-second classification on the union timeline: distraction wins over productive over neutral. */
+function sweepDayUnionMetrics(rows: ClippedDayRow[]): {
+  totalSec: number;
+  productiveSec: number;
+  unproductiveSec: number;
+} {
+  if (rows.length === 0) {
+    return { totalSec: 0, productiveSec: 0, unproductiveSec: 0 };
+  }
+
+  const bounds = new Set<number>();
+  for (const r of rows) {
+    bounds.add(r.startMs);
+    bounds.add(r.endMs);
+  }
+  const sorted = [...bounds].sort((a, b) => a - b);
+
+  let totalSec = 0;
+  let productiveSec = 0;
+  let unproductiveSec = 0;
+
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const lo = sorted[i]!;
+    const hi = sorted[i + 1]!;
+    if (hi <= lo) continue;
+
+    const covering = rows.filter((r) => r.startMs < hi && r.endMs > lo);
+    if (covering.length === 0) continue;
+
+    const sec = Math.max(0, Math.round((hi - lo) / 1000));
+    if (sec <= 0) continue;
+
+    totalSec += sec;
+    const anyNeg = covering.some((r) => r.prod < 0);
+    const anyPos = covering.some((r) => r.prod > 0);
+    if (anyNeg) unproductiveSec += sec;
+    else if (anyPos) productiveSec += sec;
+  }
+
+  return { totalSec, productiveSec, unproductiveSec };
+}
+
+const MAX_OVERLAP_PAIRS = 28;
+
+function buildOverlapDiagnostics(
+  rows: ClippedDayRow[],
+  unionTotalSeconds: number
+): DayOverlapDiagnostic {
+  let sumRawClippedSeconds = 0;
+  for (const r of rows) {
+    sumRawClippedSeconds += Math.max(0, Math.round((r.endMs - r.startMs) / 1000));
+  }
+
+  const pairs: DayOverlapDiagnostic['pairs'] = [];
+  for (let i = 0; i < rows.length; i++) {
+    for (let j = i + 1; j < rows.length; j++) {
+      const a = rows[i]!;
+      const b = rows[j]!;
+      const start = Math.max(a.startMs, b.startMs);
+      const end = Math.min(a.endMs, b.endMs);
+      if (end <= start) continue;
+      const overlapSec = Math.max(0, Math.round((end - start) / 1000));
+      if (overlapSec < 1) continue;
+      pairs.push({
+        overlapSec,
+        aId: a.id,
+        bId: b.id,
+        aLabel: a.label,
+        bLabel: b.label,
+      });
+    }
+  }
+  pairs.sort((x, y) => y.overlapSec - x.overlapSec);
+  const top = pairs.slice(0, MAX_OVERLAP_PAIRS);
+
+  return {
+    sumRawClippedSeconds,
+    unionTotalSeconds: unionTotalSeconds,
+    doubleCountedSeconds: Math.max(0, sumRawClippedSeconds - unionTotalSeconds),
+    pairs: top,
+  };
+}
+
 export function computeDailyStats(
   activities: ActivityEntry[],
   manualEntries: ManualEntry[],
@@ -411,34 +544,24 @@ export function computeDailyStats(
   idleThresholdMinutes: number = 2
 ): DailyStats[] {
   const out: DailyStats[] = [];
+  const anchorDayStr = format(anchorDate, 'yyyy-MM-dd');
+
   for (let i = days - 1; i >= 0; i--) {
     const d = subDays(anchorDate, i);
     const dateStr = format(d, 'yyyy-MM-dd');
 
-    let totalTime = 0;
-    let productiveTime = 0;
-    let unproductiveTime = 0;
+    const clippedRows = gatherClippedRowsForDay(dateStr, activities, manualEntries);
+    const { totalSec, productiveSec, unproductiveSec } = sweepDayUnionMetrics(clippedRows);
+
+    const totalTime = totalSec;
+    const productiveTime = productiveSec;
+    const unproductiveTime = unproductiveSec;
+
     const projectSeconds: Record<string, number> = {};
-
-    const addProjectTime = (pid: string | undefined, secs: number) => {
-      if (!pid) return;
-      projectSeconds[pid] = (projectSeconds[pid] ?? 0) + secs;
-    };
-
-    for (const a of activities) {
-      if (format(parseISO(a.startTime), 'yyyy-MM-dd') !== dateStr) continue;
-      totalTime += a.duration;
-      const p = effectiveActivityProductivity(a);
-      if (p > 0) productiveTime += a.duration;
-      else if (p < 0) unproductiveTime += a.duration;
-      addProjectTime(a.projectId, a.duration);
-    }
-
-    for (const m of manualEntries) {
-      if (format(parseISO(m.startTime), 'yyyy-MM-dd') !== dateStr) continue;
-      totalTime += m.duration;
-      productiveTime += m.duration;
-      addProjectTime(m.projectId, m.duration);
+    for (const r of clippedRows) {
+      if (!r.projectId) continue;
+      const len = Math.max(0, Math.round((r.endMs - r.startMs) / 1000));
+      projectSeconds[r.projectId] = (projectSeconds[r.projectId] ?? 0) + len;
     }
 
     const denom = productiveTime + unproductiveTime;
@@ -446,6 +569,9 @@ export function computeDailyStats(
       denom > 0 ? Math.round((productiveTime / denom) * 100) : totalTime > 0 ? 50 : 0;
 
     const idleTime = computeIdleSecondsForDay(dateStr, activities, idleThresholdMinutes, anchorDate);
+
+    const overlapDiagnostics =
+      dateStr === anchorDayStr ? buildOverlapDiagnostics(clippedRows, totalTime) : undefined;
 
     out.push({
       date: dateStr,
@@ -455,6 +581,7 @@ export function computeDailyStats(
       idleTime,
       productivityScore,
       projects: projectSeconds,
+      overlapDiagnostics,
     });
   }
   return out;

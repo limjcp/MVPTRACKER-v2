@@ -25,6 +25,7 @@ import {
   Clapperboard,
   BookOpen,
   Settings,
+  Bug,
 } from 'lucide-react';
 import {
   AreaChart,
@@ -160,7 +161,7 @@ export default function Dashboard() {
         <StatCard
           label="Today's Total"
           value={formatDuration(todayStats?.totalTime || 0)}
-          subValue={`${totalChange > 0 ? '+' : ''}${totalChange.toFixed(0)}% vs yesterday`}
+          subValue={`Union of overlaps · ${totalChange > 0 ? '+' : ''}${totalChange.toFixed(0)}% vs yesterday`}
           trend={totalChange > 0 ? 'up' : 'down'}
           icon={Clock}
           color="blue"
@@ -198,6 +199,85 @@ export default function Dashboard() {
           color="amber"
         />
       </div>
+
+      {todayStats.overlapDiagnostics && (
+        <details className="group mb-6 rounded-2xl border border-amber-500/20 bg-amber-500/[0.04] px-4 py-3 text-left">
+          <summary className="flex cursor-pointer list-none items-center gap-2 text-amber-200/90 text-xs font-medium select-none [&::-webkit-details-marker]:hidden">
+            <Bug className="w-3.5 h-3.5 flex-shrink-0" />
+            <span>Debug: overlap & raw vs union (today)</span>
+            <span className="ml-auto text-amber-200/50 font-normal tabular-nums">
+              raw {formatDuration(todayStats.overlapDiagnostics.sumRawClippedSeconds)} → union{' '}
+              {formatDuration(todayStats.overlapDiagnostics.unionTotalSeconds)}
+            </span>
+          </summary>
+          <div className="mt-3 space-y-3 text-[11px] text-white/50 border-t border-amber-500/10 pt-3">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div>
+                <p className="text-white/30 uppercase tracking-wider text-[9px] mb-0.5">Raw sum (clipped)</p>
+                <p className="text-white/80 font-mono tabular-nums">
+                  {formatDuration(todayStats.overlapDiagnostics.sumRawClippedSeconds)}
+                </p>
+              </div>
+              <div>
+                <p className="text-white/30 uppercase tracking-wider text-[9px] mb-0.5">Union total</p>
+                <p className="text-white/80 font-mono tabular-nums">
+                  {formatDuration(todayStats.overlapDiagnostics.unionTotalSeconds)}
+                </p>
+              </div>
+              <div>
+                <p className="text-white/30 uppercase tracking-wider text-[9px] mb-0.5">Double-counted</p>
+                <p
+                  className={cn(
+                    'font-mono tabular-nums',
+                    todayStats.overlapDiagnostics.doubleCountedSeconds > 0 ? 'text-amber-400' : 'text-white/40'
+                  )}
+                >
+                  {formatDuration(todayStats.overlapDiagnostics.doubleCountedSeconds)}
+                </p>
+              </div>
+              <div>
+                <p className="text-white/30 uppercase tracking-wider text-[9px] mb-0.5">Overlapping pairs</p>
+                <p className="text-white/80 font-mono tabular-nums">{todayStats.overlapDiagnostics.pairs.length}</p>
+              </div>
+            </div>
+            <p className="text-white/35 leading-relaxed">
+              Totals use a merged timeline so overlapping automatic + manual (or duplicate rows) are not summed twice.
+              Productivity uses the same timeline: if any overlapping slice is a distraction, that second counts as
+              unproductive.
+            </p>
+            {todayStats.overlapDiagnostics.pairs.length > 0 ? (
+              <div className="max-h-40 overflow-y-auto rounded-lg border border-white/[0.06] bg-[#0D0F14]/80">
+                <table className="w-full text-left">
+                  <thead>
+                    <tr className="text-white/30 text-[10px] uppercase tracking-wider border-b border-white/[0.06]">
+                      <th className="px-2 py-1.5 font-medium">Overlap</th>
+                      <th className="px-2 py-1.5 font-medium">A</th>
+                      <th className="px-2 py-1.5 font-medium">B</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {todayStats.overlapDiagnostics.pairs.map((row, idx) => (
+                      <tr key={`${row.aId}-${row.bId}-${idx}`} className="border-b border-white/[0.04] last:border-0">
+                        <td className="px-2 py-1.5 text-amber-400/90 font-mono tabular-nums whitespace-nowrap">
+                          {formatDuration(row.overlapSec)}
+                        </td>
+                        <td className="px-2 py-1.5 text-white/60 truncate max-w-[140px]" title={row.aLabel}>
+                          {row.aLabel}
+                        </td>
+                        <td className="px-2 py-1.5 text-white/60 truncate max-w-[140px]" title={row.bLabel}>
+                          {row.bLabel}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="text-white/25 text-center py-2">No overlapping intervals for today (after clip to local day).</p>
+            )}
+          </div>
+        </details>
+      )}
 
       <div className="grid grid-cols-12 gap-4 mb-4">
         {/* Weekly Overview Chart */}
