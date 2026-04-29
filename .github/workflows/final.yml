@@ -13,28 +13,23 @@ jobs:
   windows-x64:
     runs-on: windows-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v6
 
-      - name: Setup Node (for your project)
-        uses: actions/setup-node@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: "20"
           cache: "npm"
 
-      - name: Install dependencies
-        run: npm ci
+      - run: npm ci
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
 
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
+      - uses: swatinem/rust-cache@v2
         with:
           workspaces: |
             src-tauri/app
 
-      - name: Build (Tauri) Windows x64
+      - name: Build (Tauri) Windows
         run: npm run tauri:build
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
@@ -43,44 +38,39 @@ jobs:
       - name: Upload Windows bundles
         uses: actions/upload-artifact@v6
         with:
-          name: mvptracker-windows-x64
+          name: mvptracker-windows
           path: |
-            src-tauri/app/target/release/bundle/**
+            src-tauri/app/target/**/release/bundle/**
 
   macos-x64:
     runs-on: macos-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v6
 
-      - name: Setup Node (for your project)
-        uses: actions/setup-node@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: "20"
           cache: "npm"
 
-      - name: Install dependencies
-        run: npm ci
+      - run: npm ci
 
-      - name: Setup Rust (x86_64)
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-apple-darwin
 
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
+      - uses: swatinem/rust-cache@v2
         with:
           workspaces: |
             src-tauri/app
 
-      - name: Build (Tauri) macOS Intel (Monterey+)
-        run: npm run tauri:build -- --target x86_64-apple-darwin
+      - name: Build (Tauri) macOS x64 (Intel / Monterey+)
+        run: npx tauri build --config src-tauri/app/tauri.conf.json --target x86_64-apple-darwin
         env:
           MACOSX_DEPLOYMENT_TARGET: "12.0"
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
 
-      - name: Upload macOS Intel bundles
+      - name: Upload macOS x64 bundles
         uses: actions/upload-artifact@v6
         with:
           name: mvptracker-macos-x64
@@ -90,31 +80,26 @@ jobs:
   macos-arm64:
     runs-on: macos-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v6
 
-      - name: Setup Node (for your project)
-        uses: actions/setup-node@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: "20"
           cache: "npm"
 
-      - name: Install dependencies
-        run: npm ci
+      - run: npm ci
 
-      - name: Setup Rust (arm64)
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin
 
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
+      - uses: swatinem/rust-cache@v2
         with:
           workspaces: |
             src-tauri/app
 
-      - name: Build (Tauri) macOS Apple Silicon
-        run: npm run tauri:build -- --target aarch64-apple-darwin
+      - name: Build (Tauri) macOS arm64 (Apple Silicon)
+        run: npx tauri build --config src-tauri/app/tauri.conf.json --target aarch64-apple-darwin
         env:
           MACOSX_DEPLOYMENT_TARGET: "12.0"
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
@@ -127,36 +112,30 @@ jobs:
           path: |
             src-tauri/app/target/aarch64-apple-darwin/release/bundle/**
 
-  # Optional: attempt a universal build (won't break your pipeline if unsupported)
   macos-universal-optional:
     runs-on: macos-latest
     continue-on-error: true
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v6
 
-      - name: Setup Node (for your project)
-        uses: actions/setup-node@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: "20"
           cache: "npm"
 
-      - name: Install dependencies
-        run: npm ci
+      - run: npm ci
 
-      - name: Setup Rust (both targets)
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
+      - uses: swatinem/rust-cache@v2
         with:
           workspaces: |
             src-tauri/app
 
       - name: Build (Tauri) macOS universal (best effort)
-        run: npm run tauri:build -- --target universal-apple-darwin
+        run: npx tauri build --config src-tauri/app/tauri.conf.json --target universal-apple-darwin
         env:
           MACOSX_DEPLOYMENT_TARGET: "12.0"
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
