@@ -1,0 +1,170 @@
+name: Desktop build (Windows + macOS x64/arm64 + optional universal)
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*.*.*"
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  windows-x64:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node (for your project)
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            src-tauri/app
+
+      - name: Build (Tauri) Windows x64
+        run: npm run tauri:build
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+
+      - name: Upload Windows bundles
+        uses: actions/upload-artifact@v6
+        with:
+          name: mvptracker-windows-x64
+          path: |
+            src-tauri/app/target/release/bundle/**
+
+  macos-x64:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node (for your project)
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Setup Rust (x86_64)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            src-tauri/app
+
+      - name: Build (Tauri) macOS Intel (Monterey+)
+        run: npm run tauri:build -- --target x86_64-apple-darwin
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "12.0"
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+
+      - name: Upload macOS Intel bundles
+        uses: actions/upload-artifact@v6
+        with:
+          name: mvptracker-macos-x64
+          path: |
+            src-tauri/app/target/x86_64-apple-darwin/release/bundle/**
+
+  macos-arm64:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node (for your project)
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Setup Rust (arm64)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            src-tauri/app
+
+      - name: Build (Tauri) macOS Apple Silicon
+        run: npm run tauri:build -- --target aarch64-apple-darwin
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "12.0"
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+
+      - name: Upload macOS arm64 bundles
+        uses: actions/upload-artifact@v6
+        with:
+          name: mvptracker-macos-arm64
+          path: |
+            src-tauri/app/target/aarch64-apple-darwin/release/bundle/**
+
+  # Optional: attempt a universal build (won't break your pipeline if unsupported)
+  macos-universal-optional:
+    runs-on: macos-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node (for your project)
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Setup Rust (both targets)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            src-tauri/app
+
+      - name: Build (Tauri) macOS universal (best effort)
+        run: npm run tauri:build -- --target universal-apple-darwin
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "12.0"
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+
+      - name: Upload macOS universal bundles (if produced)
+        uses: actions/upload-artifact@v6
+        with:
+          name: mvptracker-macos-universal
+          path: |
+            src-tauri/app/target/universal-apple-darwin/release/bundle/**
