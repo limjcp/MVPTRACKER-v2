@@ -82,6 +82,7 @@ fn snapshot_windows() -> ActiveWindowInfo {
 
 #[cfg(target_os = "macos")]
 fn snapshot_macos() -> ActiveWindowInfo {
+  use objc2::msg_send;
   use objc2_app_kit::NSWorkspace;
 
   let ws = NSWorkspace::sharedWorkspace();
@@ -104,7 +105,8 @@ fn snapshot_macos() -> ActiveWindowInfo {
   // Window titles on macOS require Accessibility permission. If not granted, we still
   // return the foreground app so tracking can proceed.
   let window_title = if macos_accessibility_trusted(false) {
-    macos_focused_window_title(app.processIdentifier())
+    let pid: i32 = unsafe { msg_send![&*app, processIdentifier] };
+    macos_focused_window_title(pid)
   } else {
     String::new()
   };
