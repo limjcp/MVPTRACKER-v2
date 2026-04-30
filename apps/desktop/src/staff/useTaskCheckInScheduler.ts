@@ -8,7 +8,7 @@ import { parseISO } from 'date-fns';
 import { useStore } from './store/useStore';
 import type { TaskSegment } from './types';
 
-const CHECKIN_MS = 1 * 60 * 1000;
+const CHECKIN_MS = 15 * 60 * 1000;
 const TICK_MS = 60 * 1000;
 const LS_DAILY_CHECKIN_SHOWN_DAY = 'mvptracker:lastDailyCheckinShownDay';
 
