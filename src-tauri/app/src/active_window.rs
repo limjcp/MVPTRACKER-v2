@@ -85,8 +85,10 @@ fn snapshot_macos() -> ActiveWindowInfo {
   use objc2::msg_send;
   use objc2_app_kit::NSWorkspace;
 
-  let ws = NSWorkspace::sharedWorkspace();
-  let frontmost = ws.frontmostApplication();
+  let frontmost = unsafe {
+    let ws = NSWorkspace::sharedWorkspace();
+    ws.frontmostApplication()
+  };
 
   let Some(app) = frontmost else {
     return ActiveWindowInfo {
@@ -96,11 +98,13 @@ fn snapshot_macos() -> ActiveWindowInfo {
     };
   };
 
-  let process_name = app
-    .localizedName()
-    .map(|s| s.to_string())
-    .or_else(|| app.bundleIdentifier().map(|s| s.to_string()))
-    .unwrap_or_default();
+  let process_name = unsafe {
+    app
+      .localizedName()
+      .map(|s| s.to_string())
+      .or_else(|| app.bundleIdentifier().map(|s| s.to_string()))
+      .unwrap_or_default()
+  };
 
   // Window titles on macOS require Accessibility permission. If not granted, we still
   // return the foreground app so tracking can proceed.
