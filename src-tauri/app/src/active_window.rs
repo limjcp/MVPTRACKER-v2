@@ -133,7 +133,6 @@ fn macos_accessibility_trusted(prompt: bool) -> bool {
   #[link(name = "ApplicationServices", kind = "framework")]
   extern "C" {
     fn AXIsProcessTrustedWithOptions(options: CFDictionaryRef) -> Boolean;
-    static kAXTrustedCheckOptionPrompt: core_foundation_sys::string::CFStringRef;
   }
 
   // If we don't want to prompt, prefer the simple check.
@@ -144,7 +143,8 @@ fn macos_accessibility_trusted(prompt: bool) -> bool {
     }
     unsafe { AXIsProcessTrusted() != 0 }
   } else {
-    let key = unsafe { CFString::wrap_under_get_rule(kAXTrustedCheckOptionPrompt) };
+    // Avoid linking against the global symbol; use the documented key string instead.
+    let key = CFString::new("AXTrustedCheckOptionPrompt");
     let val = if prompt { core_foundation::boolean::CFBoolean::true_value() } else { core_foundation::boolean::CFBoolean::false_value() };
     let opts = CFDictionary::from_CFType_pairs(&[(key.as_CFType(), val.as_CFType())]);
     unsafe { AXIsProcessTrustedWithOptions(opts.as_concrete_TypeRef()) != 0 }
@@ -179,18 +179,20 @@ fn macos_focused_window_title(pid: i32) -> String {
       attribute: CFStringRef,
       value: *mut CFTypeRef,
     ) -> AXError;
-    static kAXFocusedWindowAttribute: CFStringRef;
-    static kAXTitleAttribute: CFStringRef;
   }
 
   unsafe {
+    // Avoid linking against kAX* global symbols; use documented attribute strings instead.
+    let focused_attr = CFString::new("AXFocusedWindow");
+    let title_attr = CFString::new("AXTitle");
+
     let app_el = AXUIElementCreateApplication(pid);
     if app_el.is_null() {
       return String::new();
     }
 
     let mut focused: CFTypeRef = std::ptr::null_mut();
-    let err = AXUIElementCopyAttributeValue(app_el, kAXFocusedWindowAttribute, &mut focused);
+    let err = AXUIElementCopyAttributeValue(app_el, focused_attr.as_concrete_TypeRef(), &mut focused);
     if err != 0 || focused.is_null() {
       CFRelease(app_el as *const _);
       return String::new();
@@ -198,7 +200,7 @@ fn macos_focused_window_title(pid: i32) -> String {
     let focused_el = focused as AXUIElementRef;
 
     let mut title_val: CFTypeRef = std::ptr::null_mut();
-    let err2 = AXUIElementCopyAttributeValue(focused_el, kAXTitleAttribute, &mut title_val);
+    let err2 = AXUIElementCopyAttributeValue(focused_el, title_attr.as_concrete_TypeRef(), &mut title_val);
 
     // Release focused window element now that we're done with it.
     CFRelease(focused as *const _);
