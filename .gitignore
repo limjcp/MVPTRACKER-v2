@@ -4,3 +4,4 @@ node_modules/
 src-tauri/app/target/
 .env
 .env.local
+apps/desktop/dist/

@@ -113,6 +113,7 @@ export function useAutomaticTracking(enabled = true) {
 
   const currentSliceIdRef = useRef<string | null>(null);
   const currentSliceKeyRef = useRef<string | null>(null);
+  const macosAxPromptedRef = useRef(false);
 
   useEffect(() => {
     if (!enabled || !isTauri()) {
@@ -141,7 +142,17 @@ export function useAutomaticTracking(enabled = true) {
           setCurrentApp('');
           currentSliceIdRef.current = null;
           currentSliceKeyRef.current = null;
+          macosAxPromptedRef.current = false;
           return;
+        }
+
+        const isMac =
+          typeof navigator !== 'undefined' &&
+          typeof navigator.platform === 'string' &&
+          navigator.platform.toLowerCase().includes('mac');
+        if (isMac && !macosAxPromptedRef.current) {
+          macosAxPromptedRef.current = true;
+          void invoke('macos_ensure_accessibility', { prompt: true }).catch(() => {});
         }
 
         const snap = normalizeActiveWindow(await invoke('get_active_window'));

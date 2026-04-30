@@ -80,16 +80,147 @@ fn snapshot_windows() -> ActiveWindowInfo {
   }
 }
 
+#[cfg(target_os = "macos")]
+fn snapshot_macos() -> ActiveWindowInfo {
+  use objc2_app_kit::NSWorkspace;
+
+  let ws = NSWorkspace::sharedWorkspace();
+  let frontmost = ws.frontmostApplication();
+
+  let Some(app) = frontmost else {
+    return ActiveWindowInfo {
+      process_name: String::new(),
+      window_title: String::new(),
+      available: true,
+    };
+  };
+
+  let process_name = app
+    .localizedName()
+    .map(|s| s.to_string())
+    .or_else(|| app.bundleIdentifier().map(|s| s.to_string()))
+    .unwrap_or_default();
+
+  // Window titles on macOS require Accessibility permission. If not granted, we still
+  // return the foreground app so tracking can proceed.
+  let window_title = if macos_accessibility_trusted(false) {
+    macos_focused_window_title(app.processIdentifier())
+  } else {
+    String::new()
+  };
+
+  ActiveWindowInfo {
+    process_name,
+    window_title,
+    available: true,
+  }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_accessibility_trusted(prompt: bool) -> bool {
+  use core_foundation::base::TCFType;
+  use core_foundation::dictionary::CFDictionary;
+  use core_foundation::string::CFString;
+  use core_foundation_sys::base::Boolean;
+  use core_foundation_sys::dictionary::CFDictionaryRef;
+
+  #[link(name = "ApplicationServices", kind = "framework")]
+  extern "C" {
+    fn AXIsProcessTrustedWithOptions(options: CFDictionaryRef) -> Boolean;
+    static kAXTrustedCheckOptionPrompt: core_foundation_sys::string::CFStringRef;
+  }
+
+  // If we don't want to prompt, prefer the simple check.
+  if !prompt {
+    #[link(name = "ApplicationServices", kind = "framework")]
+    extern "C" {
+      fn AXIsProcessTrusted() -> Boolean;
+    }
+    unsafe { AXIsProcessTrusted() != 0 }
+  } else {
+    let key = unsafe { CFString::wrap_under_get_rule(kAXTrustedCheckOptionPrompt) };
+    let val = if prompt { core_foundation::boolean::CFBoolean::true_value() } else { core_foundation::boolean::CFBoolean::false_value() };
+    let opts = CFDictionary::from_CFType_pairs(&[(key.as_CFType(), val.as_CFType())]);
+    unsafe { AXIsProcessTrustedWithOptions(opts.as_concrete_TypeRef()) != 0 }
+  }
+}
+
+#[cfg(target_os = "macos")]
+pub fn ensure_accessibility(prompt: bool) -> bool {
+  macos_accessibility_trusted(prompt)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn ensure_accessibility(_prompt: bool) -> bool {
+  true
+}
+
+#[cfg(target_os = "macos")]
+fn macos_focused_window_title(pid: i32) -> String {
+  use core_foundation::base::TCFType;
+  use core_foundation::string::CFString;
+  use core_foundation_sys::base::{CFRelease, CFTypeRef};
+  use core_foundation_sys::string::CFStringRef;
+
+  type AXUIElementRef = *const std::ffi::c_void;
+  type AXError = i32;
+
+  #[link(name = "ApplicationServices", kind = "framework")]
+  extern "C" {
+    fn AXUIElementCreateApplication(pid: i32) -> AXUIElementRef;
+    fn AXUIElementCopyAttributeValue(
+      element: AXUIElementRef,
+      attribute: CFStringRef,
+      value: *mut CFTypeRef,
+    ) -> AXError;
+    static kAXFocusedWindowAttribute: CFStringRef;
+    static kAXTitleAttribute: CFStringRef;
+  }
+
+  unsafe {
+    let app_el = AXUIElementCreateApplication(pid);
+    if app_el.is_null() {
+      return String::new();
+    }
+
+    let mut focused: CFTypeRef = std::ptr::null_mut();
+    let err = AXUIElementCopyAttributeValue(app_el, kAXFocusedWindowAttribute, &mut focused);
+    if err != 0 || focused.is_null() {
+      CFRelease(app_el as *const _);
+      return String::new();
+    }
+    let focused_el = focused as AXUIElementRef;
+
+    let mut title_val: CFTypeRef = std::ptr::null_mut();
+    let err2 = AXUIElementCopyAttributeValue(focused_el, kAXTitleAttribute, &mut title_val);
+
+    // Release focused window element now that we're done with it.
+    CFRelease(focused as *const _);
+    // Release the application AX element as well.
+    CFRelease(app_el as *const _);
+
+    if err2 != 0 || title_val.is_null() {
+      return String::new();
+    }
+
+    let title_cf: CFStringRef = title_val as CFStringRef;
+    let title = CFString::wrap_under_create_rule(title_cf).to_string();
+
+    title
+  }
+}
+
 #[cfg(target_os = "windows")]
 pub fn snapshot() -> ActiveWindowInfo {
   snapshot_windows()
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
 pub fn snapshot() -> ActiveWindowInfo {
-  ActiveWindowInfo {
-    process_name: String::new(),
-    window_title: String::new(),
-    available: false,
-  }
+  snapshot_macos()
+}
+
+#[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+pub fn snapshot() -> ActiveWindowInfo {
+  ActiveWindowInfo { process_name: String::new(), window_title: String::new(), available: false }
 }

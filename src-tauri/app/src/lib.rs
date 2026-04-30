@@ -1,6 +1,7 @@
 mod active_window;
 
 use std::path::PathBuf;
+use serde::Serialize;
 use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
 
@@ -14,6 +15,7 @@ pub fn run() {
     .invoke_handler(tauri::generate_handler![
       health,
       get_active_window,
+      macos_ensure_accessibility,
       save_report_file,
       db_init,
       db_list_projects,
@@ -72,6 +74,21 @@ fn health() -> mvptracker_core::Health {
 #[tauri::command]
 fn get_active_window() -> active_window::ActiveWindowInfo {
   active_window::snapshot()
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AccessibilityTrust {
+  trusted: bool,
+}
+
+/// On macOS, prompts for Accessibility permission (needed for window titles).
+/// On other OS, this is a no-op that returns trusted=true.
+#[tauri::command]
+fn macos_ensure_accessibility(prompt: bool) -> AccessibilityTrust {
+  AccessibilityTrust {
+    trusted: active_window::ensure_accessibility(prompt),
+  }
 }
 
 /// Opens a native save dialog and writes `contents` to the chosen path.
