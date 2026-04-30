@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { prepareTaskCheckInWindow } from '../useTaskCheckInScheduler';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { emit } from '@tauri-apps/api/event';
@@ -32,6 +32,15 @@ type BlockTagRow = {
 };
 
 type CorporationRow = { id: string; name: string };
+
+function readDefaultNo(): boolean {
+  try {
+    const v = new URLSearchParams(window.location.search).get('default');
+    return v === 'no';
+  } catch {
+    return false;
+  }
+}
 
 function fromSegmentRow(r: Record<string, unknown>): TaskSegmentRow {
   return {
@@ -102,7 +111,8 @@ function buildStillOnLines(
 }
 
 export default function TaskCheckInPanel() {
-  const [step, setStep] = useState<Step>('ask');
+  const defaultNo = useMemo(() => readDefaultNo(), []);
+  const [step, setStep] = useState<Step>(() => (defaultNo ? 'newTask' : 'ask'));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -149,6 +159,7 @@ export default function TaskCheckInPanel() {
     [tags, openSegment]
   );
 
+  const didInitDefaultNo = useRef(false);
   const { headline, detail } = useMemo(
     () => buildStillOnLines(openSegment, openTag, corpsById),
     [openSegment, openTag, corpsById]
@@ -156,6 +167,14 @@ export default function TaskCheckInPanel() {
 
   const selectedTaskOpt = getTaskTypeOption(taskSlug || undefined);
   const isOther = taskSlug === OTHER_TASK_SLUG;
+
+  const canStartNewBlock = useMemo(() => {
+    const corpOk = corpId.trim() !== '' || newCorpDraft.trim() !== '';
+    const taskOk = taskSlug.trim() !== '';
+    const detailOk = !selectedTaskOpt?.requiresDetail || detailDraft.trim() !== '';
+    const otherOk = !isOther || otherDraft.trim() !== '';
+    return corpOk && taskOk && detailOk && otherOk && !busy;
+  }, [corpId, newCorpDraft, taskSlug, selectedTaskOpt?.requiresDetail, detailDraft, isOther, otherDraft, busy]);
 
   const closeWindow = async () => {
     if (!isTauri()) return;
@@ -208,6 +227,15 @@ export default function TaskCheckInPanel() {
     setStep('newTask');
   };
 
+  useEffect(() => {
+    if (!defaultNo) return;
+    if (step !== 'newTask') return;
+    if (didInitDefaultNo.current) return;
+    didInitDefaultNo.current = true;
+    goToNewTask();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [defaultNo, step, openTag]);
+
   const handleAddCorp = async () => {
     const name = newCorpDraft.trim();
     if (!name || !isTauri()) return;
@@ -224,6 +252,10 @@ export default function TaskCheckInPanel() {
 
   const onConfirmNewTask = async () => {
     if (!isTauri()) return;
+    if (!canStartNewBlock) {
+      setError('Pick a corporation and task type to start a new block.');
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -310,13 +342,17 @@ export default function TaskCheckInPanel() {
                 type="button"
                 disabled={busy}
                 onClick={() => {
+                  if (defaultNo) {
+                    void onYes();
+                    return;
+                  }
                   setError(null);
                   setStep('ask');
                 }}
                 className="self-start flex items-center gap-1 text-[10px] text-white/40 hover:text-white/65 disabled:opacity-40 -ml-0.5"
               >
                 <ArrowLeft className="w-3 h-3" />
-                Back
+                {defaultNo ? 'Same task' : 'Back'}
               </button>
               <h1 className="text-[10px] font-semibold text-white">New task block</h1>
               {/* <p className="text-[10px] text-white/42 leading-snug">
@@ -419,7 +455,7 @@ export default function TaskCheckInPanel() {
             <div className="shrink-0 pt-1">
               <button
                 type="button"
-                disabled={busy}
+                disabled={!canStartNewBlock}
                 onClick={() => void onConfirmNewTask()}
                 className="w-full rounded-lg bg-violet-500/90 py-2 text-[12px] font-medium text-white hover:bg-violet-500 disabled:opacity-40"
               >

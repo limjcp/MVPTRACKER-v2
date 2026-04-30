@@ -10,6 +10,7 @@ import type { TaskSegment } from './types';
 
 const CHECKIN_MS = 1 * 60 * 1000;
 const TICK_MS = 60 * 1000;
+const LS_DAILY_CHECKIN_SHOWN_DAY = 'mvptracker:lastDailyCheckinShownDay';
 
 /** Match TaskCheckInPanel compact layout for placement math. */
 export const TASK_CHECKIN_WINDOW_WIDTH = 360;
@@ -63,6 +64,33 @@ function checkInWindowUrl(): string {
   return `${window.location.origin}/staff?checkin=1`;
 }
 
+function checkInWindowUrlWithDefaultNo(): string {
+  return `${window.location.origin}/staff?checkin=1&default=no`;
+}
+
+function safeGetLocalStorage(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function safeSetLocalStorage(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // ignore
+  }
+}
+
+function localDayKey(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 function deadlineMs(segments: TaskSegment[]): number {
   const open = segments
     .filter((s) => !s.endTime)
@@ -72,7 +100,7 @@ function deadlineMs(segments: TaskSegment[]): number {
   return parseISO(anchorIso).getTime() + CHECKIN_MS;
 }
 
-async function openOrFocusCheckInWindow(): Promise<void> {
+async function openOrFocusCheckInWindow(opts?: { defaultNo?: boolean }): Promise<void> {
   const { x, y } = await logicalTopRightForCheckInWindow();
   const existing = await WebviewWindow.getByLabel('task-checkin');
   if (existing) {
@@ -82,7 +110,7 @@ async function openOrFocusCheckInWindow(): Promise<void> {
     return;
   }
   const w = new WebviewWindow('task-checkin', {
-    url: checkInWindowUrl(),
+    url: opts?.defaultNo ? checkInWindowUrlWithDefaultNo() : checkInWindowUrl(),
     title: 'Task check-in',
     width: TASK_CHECKIN_WINDOW_WIDTH,
     height: TASK_CHECKIN_WINDOW_HEIGHT,
@@ -110,6 +138,17 @@ async function openOrFocusCheckInWindow(): Promise<void> {
 export function useTaskCheckInScheduler(enabled: boolean) {
   const reloadTaskSegments = useStore((s) => s.reloadTaskSegments);
   const refreshDerivedTimeline = useStore((s) => s.refreshDerivedTimeline);
+
+  useEffect(() => {
+    if (!enabled || !isTauri()) return;
+    const segments = useStore.getState().taskSegments;
+    if (segments.length === 0) return;
+
+    const today = localDayKey(new Date());
+    if (safeGetLocalStorage(LS_DAILY_CHECKIN_SHOWN_DAY) === today) return;
+    safeSetLocalStorage(LS_DAILY_CHECKIN_SHOWN_DAY, today);
+    void openOrFocusCheckInWindow({ defaultNo: true });
+  }, [enabled]);
 
   useEffect(() => {
     if (!isTauri()) return;

@@ -3,15 +3,72 @@ mod active_window;
 use std::path::PathBuf;
 use serde::Serialize;
 use tauri::Manager;
+use tauri::WindowEvent;
 use tauri_plugin_dialog::DialogExt;
 
 #[derive(Clone)]
 struct DbPath(PathBuf);
 
+const TRAY_MENU_TOGGLE: &str = "toggle_main";
+const TRAY_MENU_QUIT: &str = "quit";
+
+fn hide_main_window(window: &tauri::WebviewWindow) {
+  let _ = window.hide();
+  let _ = window.set_skip_taskbar(true);
+}
+
+fn show_main_window(window: &tauri::WebviewWindow) {
+  let _ = window.set_skip_taskbar(false);
+  let _ = window.show();
+  let _ = window.set_focus();
+}
+
+fn toggle_main_window(app: &tauri::AppHandle) {
+  let Some(window) = app.get_webview_window("main") else {
+    return;
+  };
+  match window.is_visible() {
+    Ok(true) => hide_main_window(&window),
+    Ok(false) => show_main_window(&window),
+    Err(_) => show_main_window(&window),
+  }
+}
+
+fn build_tray(app: &tauri::AppHandle) -> Result<(), tauri::Error> {
+  use tauri::menu::{Menu, MenuItem};
+  use tauri::tray::TrayIconBuilder;
+
+  let toggle = MenuItem::with_id(app, TRAY_MENU_TOGGLE, "Show/Hide", true, None::<&str>)?;
+  let quit = MenuItem::with_id(app, TRAY_MENU_QUIT, "Quit", true, None::<&str>)?;
+  let menu = Menu::with_items(app, &[&toggle, &quit])?;
+
+  TrayIconBuilder::new()
+    .menu(&menu)
+    .on_menu_event(|app, event| match event.id().as_ref() {
+      TRAY_MENU_TOGGLE => toggle_main_window(app),
+      TRAY_MENU_QUIT => app.exit(0),
+      _ => {}
+    })
+    .build(app)?;
+
+  Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
     .plugin(tauri_plugin_dialog::init())
+    .on_window_event(|window, event| {
+      if window.label() != "main" {
+        return;
+      }
+      if let WindowEvent::CloseRequested { api, .. } = event {
+        api.prevent_close();
+        if let Some(w) = window.app_handle().get_webview_window("main") {
+          hide_main_window(&w);
+        }
+      }
+    })
     .invoke_handler(tauri::generate_handler![
       health,
       get_active_window,
@@ -42,6 +99,8 @@ pub fn run() {
       db_task_checkin_no,
     ])
     .setup(|app| {
+      build_tray(app.handle())?;
+
       if cfg!(debug_assertions) {
         app.handle().plugin(
           tauri_plugin_log::Builder::default()
