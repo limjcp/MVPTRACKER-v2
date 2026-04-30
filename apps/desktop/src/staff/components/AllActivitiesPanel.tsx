@@ -6,6 +6,7 @@ import { mergeAllAutomaticBySameWindowTitle } from '../utils/activityMerge';
 import { APP_CATEGORY_ORDER, CATEGORY_HEX, CATEGORY_LABELS } from '../utils/appCategories';
 import { cn } from '../utils/cn';
 import { formatDuration } from '../utils/format';
+import { unionSecondsForActivitiesOnDate } from '../utils/sidebarTotals';
 
 type ViewMode = 'unified' | 'category' | 'chronological';
 
@@ -39,8 +40,8 @@ export default function AllActivitiesPanel({
   );
 
   const totalSeconds = useMemo(
-    () => displayActivities.reduce((s, a) => s + a.duration, 0),
-    [displayActivities]
+    () => unionSecondsForActivitiesOnDate(dayActivities, selectedDate),
+    [dayActivities, selectedDate]
   );
 
   const tree = useMemo(() => {

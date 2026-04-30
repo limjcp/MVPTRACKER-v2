@@ -1,6 +1,7 @@
 import { Routes, Route } from 'react-router-dom';
 import LoginPage from './routes/LoginPage';
 import ProtectedRoute from './routes/ProtectedRoute';
+import AdminRoute from './routes/AdminRoute';
 import AdminRoot from './routes/AdminRoot';
 import StaffRoot from './staff/App';
 
@@ -21,7 +22,9 @@ export default function App() {
           path="/admin"
           element={
             <ProtectedRoute>
-              <AdminRoot />
+              <AdminRoute>
+                <AdminRoot />
+              </AdminRoute>
             </ProtectedRoute>
           }
         />

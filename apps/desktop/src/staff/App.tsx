@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useAutomaticTracking } from './useAutomaticTracking';
 import { useTaskCheckInScheduler } from './useTaskCheckInScheduler';
+import { useSupabaseSync } from './useSupabaseSync';
 import { useStore } from './store/useStore';
 import Sidebar from './components/Sidebar';
 import Dashboard from './components/Dashboard';
@@ -18,6 +19,7 @@ export default function App() {
 
   useTaskCheckInScheduler(!isCheckIn);
   useAutomaticTracking(!isCheckIn);
+  useSupabaseSync(!isCheckIn);
 
   // Tick all active timers every second
   useEffect(() => {

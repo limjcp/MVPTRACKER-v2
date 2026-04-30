@@ -41,6 +41,7 @@ import { cn, PROJECT_COLORS } from '../utils/cn';
 import { formatDuration } from '../utils/format';
 import { AppCategory, DailyStats } from '../types';
 import { CATEGORY_HEX } from '../utils/appCategories';
+import { unionAppSecondsForActivitiesOnDate } from '../utils/sidebarTotals';
 
 const CATEGORY_ICONS: Record<AppCategory, React.ElementType> = {
   browser: Globe,
@@ -108,11 +109,7 @@ export default function Dashboard() {
   });
 
   // Top apps today
-  const appTotals: Record<string, { duration: number; category: AppCategory }> = {};
-  todayActivities.forEach((a) => {
-    if (!appTotals[a.appName]) appTotals[a.appName] = { duration: 0, category: a.category };
-    appTotals[a.appName].duration += a.duration;
-  });
+  const appTotals = unionAppSecondsForActivitiesOnDate(todayActivities, todayKey);
   const topApps = Object.entries(appTotals)
     .sort((a, b) => b[1].duration - a[1].duration)
     .slice(0, 5);

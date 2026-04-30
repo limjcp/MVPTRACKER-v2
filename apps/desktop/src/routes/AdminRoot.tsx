@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
 import Sidebar from '../admin/components/Sidebar';
 import Settings from '../admin/components/Settings';
+import Overview from '../admin/components/Overview';
+import Users from '../admin/components/Users';
+import Security from '../admin/components/Security';
 import { useAdminSettingsStore } from '../admin/store/useAdminSettingsStore';
 import type { AdminView } from '../admin/types/adminView';
 
@@ -28,15 +31,16 @@ export default function AdminRoot() {
       <div className="flex flex-1 mt-8 overflow-hidden">
         <Sidebar currentView={currentView} setView={setCurrentView} />
         <main className="flex-1 flex flex-col overflow-hidden">
-          {currentView === 'settings' ? (
+          {currentView === 'overview' ? (
+            <Overview />
+          ) : currentView === 'users' ? (
+            <Users />
+          ) : currentView === 'security' ? (
+            <Security />
+          ) : currentView === 'settings' ? (
             <Settings />
           ) : (
-            <div className="flex-1 flex items-center justify-center">
-              <div className="text-center">
-                <p className="text-white/70 text-lg font-semibold">Admin portal</p>
-                <p className="text-white/30 text-sm mt-1">Choose Settings in the sidebar for app preferences.</p>
-              </div>
-            </div>
+            <Overview />
           )}
         </main>
       </div>

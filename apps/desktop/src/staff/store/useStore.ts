@@ -314,6 +314,8 @@ interface AppState {
   syncStatus: 'synced' | 'syncing' | 'error' | 'offline';
   lastSynced: string | null;
   triggerSync: () => void;
+  /** Changes whenever a sync is requested (manual or automatic). */
+  syncNonce: number;
 
   /** Vertical scale of the day timeline (1 = default). */
   timelineZoom: number;
@@ -802,11 +804,9 @@ export const useStore = create<AppState>((set, get) => ({
   syncStatus: 'offline',
   lastSynced: null,
   triggerSync: () => {
-    set({ syncStatus: 'syncing' });
-    setTimeout(() => {
-      set({ syncStatus: 'synced', lastSynced: new Date().toISOString() });
-    }, 1500);
+    set((s) => ({ syncNonce: s.syncNonce + 1, syncStatus: 'syncing' }));
   },
+  syncNonce: 0,
 
   timelineZoom: readStoredTimelineZoom(),
   setTimelineZoom: (zoom) => {

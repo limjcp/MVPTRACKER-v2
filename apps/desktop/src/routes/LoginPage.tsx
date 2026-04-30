@@ -4,6 +4,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { Loader2 } from 'lucide-react';
 import { cn } from '../utils/cn';
 import { supabase } from '../lib/supabase';
+import { AppUserRole, fetchUserRole, LS_PERSIST_SESSION } from '../lib/userRole';
 import AppIntro from './splash/AppIntro';
 
 const INTRO_SESSION_KEY = 'mvptracker_intro_launched';
@@ -47,10 +48,13 @@ export default function LoginPage() {
   const [initializing, setInitializing] = useState(true);
   const [authBusy, setAuthBusy] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
+  const [userRole, setUserRole] = useState<AppUserRole | null>(null);
+  const [roleResolved, setRoleResolved] = useState(false);
 
   const [techFooter, setTechFooter] = useState('Powered by Rust // Tauri v2');
 
-  const canOpenAdmin = !!userId;
+  const canOpenAdmin = userRole === 'admin';
+  const canOpenStaff = userRole === 'admin' || userRole === 'staff';
 
   useEffect(() => {
     void import('@tauri-apps/api/app')
@@ -60,20 +64,6 @@ export default function LoginPage() {
         /* browser dev: keep default label */
       });
   }, []);
-
-  const fetchRole = async (uid: string) => {
-    if (!supabase) return null;
-    const { data, error } = await supabase
-      .from('user_roles')
-      .select('role')
-      .eq('user_id', uid)
-      .single();
-
-    if (error) throw error;
-    const r = data?.role;
-    if (r !== 'admin' && r !== 'staff') return null;
-    return r;
-  };
 
   useEffect(() => {
     const client = supabase;
@@ -90,6 +80,8 @@ export default function LoginPage() {
         if (!session) {
           if (!mounted) return;
           setUserId(null);
+          setUserRole(null);
+          setRoleResolved(true);
           setStatusText('Signed out');
           return;
         }
@@ -97,14 +89,20 @@ export default function LoginPage() {
         const uid = session.user.id;
         if (!mounted) return;
         setUserId(uid);
+        setUserRole(null);
+        setRoleResolved(false);
         setStatusText('Signed in · fetching role…');
 
-        const r = await fetchRole(uid);
+        const r = await fetchUserRole(uid);
         if (!mounted) return;
+        setUserRole(r);
+        setRoleResolved(true);
         setStatusText(r ? `Signed in · role=${r}` : 'Signed in · role=unknown');
       } catch (e: unknown) {
         if (!mounted) return;
         setUserId(null);
+        setUserRole(null);
+        setRoleResolved(true);
         setStatusText(`Auth error: ${String((e as Error)?.message || e)}`);
       } finally {
         if (mounted) setInitializing(false);
@@ -117,19 +115,27 @@ export default function LoginPage() {
       if (!mounted) return;
       if (!session) {
         setUserId(null);
+        setUserRole(null);
+        setRoleResolved(true);
         setStatusText('Signed out');
         return;
       }
       const uid = session.user.id;
       setUserId(uid);
+      setUserRole(null);
+      setRoleResolved(false);
       setStatusText('Signed in · fetching role…');
-      void fetchRole(uid)
+      void fetchUserRole(uid)
         .then((r) => {
           if (!mounted) return;
+          setUserRole(r);
+          setRoleResolved(true);
           setStatusText(r ? `Signed in · role=${r}` : 'Signed in · role=unknown');
         })
         .catch((e: unknown) => {
           if (!mounted) return;
+          setUserRole(null);
+          setRoleResolved(true);
           setStatusText(`Role fetch error: ${String((e as Error)?.message || e)}`);
         });
     });
@@ -158,6 +164,26 @@ export default function LoginPage() {
         localStorage.removeItem(LS_REMEMBER);
         localStorage.removeItem(LS_EMAIL);
       }
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const setPersistSessionFlag = (nextRemember: boolean) => {
+    try {
+      if (nextRemember) {
+        localStorage.setItem(LS_PERSIST_SESSION, '1');
+      } else {
+        localStorage.setItem(LS_PERSIST_SESSION, '0');
+      }
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const clearPersistSessionFlag = () => {
+    try {
+      localStorage.removeItem(LS_PERSIST_SESSION);
     } catch {
       /* ignore */
     }
@@ -209,11 +235,12 @@ export default function LoginPage() {
                 e.preventDefault();
                 setAuthBusy(true);
                 setStatusText('Authenticating…');
-                persistRemember(rememberMe, email);
-                sb.auth
+                void sb.auth
                   .signInWithPassword({ email, password })
                   .then(({ error }) => {
                     if (error) throw error;
+                    persistRemember(rememberMe, email);
+                    setPersistSessionFlag(rememberMe);
                   })
                   .catch((err: unknown) => {
                     setStatusText(`Sign-in error: ${String((err as Error)?.message || err)}`);
@@ -287,13 +314,26 @@ export default function LoginPage() {
                 )}
               </button>
             </form>
+          ) : !roleResolved ? (
+            <p className="font-tech text-center text-[11px] text-white/40">Loading your access…</p>
           ) : (
             <div className="space-y-3">
-              <PortalButton portal="staff" enabled onClick={() => navigate('/staff')} />
-              <PortalButton portal="admin" enabled={canOpenAdmin} onClick={() => navigate('/admin')} />
+              <PortalButton
+                portal="staff"
+                enabled={canOpenStaff}
+                onClick={() => navigate('/staff')}
+                detail="Time tracking app (current features)"
+              />
+              <PortalButton
+                portal="admin"
+                enabled={canOpenAdmin}
+                onClick={() => navigate('/admin')}
+                detail={canOpenAdmin ? 'Admin controls' : 'Admins only'}
+              />
               <button
                 type="button"
                 onClick={() => {
+                  clearPersistSessionFlag();
                   void sb.auth.signOut();
                 }}
                 className="font-sans w-full rounded-xl border border-white/10 bg-white/[0.05] px-4 py-3 text-sm font-medium text-white/70 transition-colors hover:border-white/16 hover:bg-white/[0.09] hover:text-white"
@@ -340,7 +380,17 @@ export default function LoginPage() {
   );
 }
 
-function PortalButton({ portal, enabled, onClick }: { portal: Portal; enabled: boolean; onClick: () => void }) {
+function PortalButton({
+  portal,
+  enabled,
+  onClick,
+  detail,
+}: {
+  portal: Portal;
+  enabled: boolean;
+  onClick: () => void;
+  detail: string;
+}) {
   return (
     <button
       type="button"
@@ -354,9 +404,7 @@ function PortalButton({ portal, enabled, onClick }: { portal: Portal; enabled: b
       )}
     >
       <div className="font-sans text-sm font-semibold capitalize text-white">{portal} portal</div>
-      <div className="font-tech mt-1 text-[11px] text-white/38">
-        {portal === 'staff' ? 'Time tracking app (current features)' : 'Admin controls'}
-      </div>
+      <div className="font-tech mt-1 text-[11px] text-white/38">{detail}</div>
     </button>
   );
 }
