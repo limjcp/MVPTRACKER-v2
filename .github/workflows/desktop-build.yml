@@ -1,0 +1,51 @@
+name: Desktop build (Windows + macOS)
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*.*.*" # optional: build on version tags
+  # push:
+  #   branches: [ main ] # optional: build every push
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Helpful on first runs; safe to keep
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            src-tauri/app
+
+      - name: Build (Tauri)
+        run: npm run tauri:build
+
+      - name: Upload bundles
+        uses: actions/upload-artifact@v4
+        with:
+          name: mvptracker-${{ matrix.os }}
+          path: |
+            src-tauri/app/target/release/bundle/**
