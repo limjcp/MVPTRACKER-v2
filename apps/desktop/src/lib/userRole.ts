@@ -1,7 +1,9 @@
 import { supabase } from './supabase';
 
 /** Keep session across app restarts when "1"; "0" means clear session on next launch (see main.tsx bootstrap). */
-export const LS_PERSIST_SESSION = 'mvptracker_persist_session';
+export const LS_PERSIST_SESSION = 'mvptime_persist_session';
+
+export const LS_PERSIST_SESSION_LEGACY = 'mvptracker_persist_session';
 
 export type AppUserRole = 'admin' | 'staff';
 

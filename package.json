@@ -1,15 +1,15 @@
 {
-  "name": "mvptracker-v2",
+  "name": "mvptime-v2",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.1",
   "type": "module",
   "workspaces": [
     "apps/*"
   ],
   "scripts": {
-    "dev": "npm run dev -w @mvptracker/desktop",
-    "build": "npm run build -w @mvptracker/desktop",
-    "preview": "npm run preview -w @mvptracker/desktop",
+    "dev": "npm run dev -w @mvptime/desktop",
+    "build": "npm run build -w @mvptime/desktop",
+    "preview": "npm run preview -w @mvptime/desktop",
     "tauri": "cd \"src-tauri/app\" && npx tauri",
     "tauri:dev": "node scripts/tauri-dev.cjs",
     "tauri:build": "node scripts/tauri-build.cjs"
@@ -19,6 +19,8 @@
     "@fontsource/jetbrains-mono": "^5.2.8",
     "@supabase/supabase-js": "^2.104.1",
     "@tauri-apps/api": "^2.10.1",
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-updater": "^2.10.1",
     "clsx": "2.1.1",
     "date-fns": "^4.1.0",
     "jspdf": "^2.5.2",

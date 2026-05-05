@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { computeDailyStats } from './store/derive';
 import { useStore } from './store/useStore';
-import type { ActivityEntry, ManualEntry, Project } from './types';
+import type { ActivityEntry, ManualEntry, Project, TaskSegment } from './types';
+import { formatTaskType } from './utils/taskTypes';
 
 function chunk<T>(rows: T[], size: number): T[][] {
   const out: T[][] = [];
@@ -17,6 +18,125 @@ function dayStrFromIso(iso: string): string {
 function clampInt(n: number): number {
   if (!Number.isFinite(n)) return 0;
   return Math.max(0, Math.floor(n));
+}
+
+function localDayKey(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function addDaysLocal(d: Date, days: number): Date {
+  const x = new Date(d);
+  x.setDate(x.getDate() + days);
+  return x;
+}
+
+function startOfDayLocal(dateStr: string): Date {
+  // Local midnight (matches staff timeline day bucketing)
+  return new Date(`${dateStr}T00:00:00`);
+}
+
+function endOfDayLocal(dateStr: string): Date {
+  return new Date(`${dateStr}T23:59:59.999`);
+}
+
+function clipMsToDay(startMs: number, endMs: number, dateStr: string): { startMs: number; endMs: number } | null {
+  const d0 = startOfDayLocal(dateStr).getTime();
+  const d1 = endOfDayLocal(dateStr).getTime();
+  const s = Math.max(startMs, d0);
+  const e = Math.min(endMs, d1);
+  if (e <= s) return null;
+  return { startMs: s, endMs: e };
+}
+
+function buildUserTaskBlockDaily(
+  taskSegments: TaskSegment[],
+  blockTags: Array<{ segmentId?: string; corporationId?: string; taskType?: string; taskTypeDetail?: string }>,
+  corporations: Array<{ id: string; name: string }>,
+  daysBack: number,
+  anchorIso: string
+): Array<{
+  day: string;
+  corporation_id: string | null;
+  task_type: string | null;
+  task_type_detail: string | null;
+  label: string;
+  seconds: number;
+}> {
+  const anchor = new Date(anchorIso);
+  const anchorDay = localDayKey(anchor);
+  const corpNameById = new Map(corporations.map((c) => [c.id, c.name] as const));
+
+  const tagBySegmentId = new Map<string, { corporationId?: string; taskType?: string; taskTypeDetail?: string }>();
+  for (const t of blockTags) {
+    if (t.segmentId) tagBySegmentId.set(t.segmentId, t);
+  }
+
+  const byKey = new Map<string, { day: string; corporation_id: string | null; task_type: string | null; task_type_detail: string | null; label: string; seconds: number }>();
+
+  const dayInRange = (day: string) => {
+    const dayStart = startOfDayLocal(day).getTime();
+    const anchorStart = startOfDayLocal(anchorDay).getTime();
+    const deltaDays = Math.floor((anchorStart - dayStart) / (24 * 3600 * 1000));
+    return deltaDays >= 0 && deltaDays < daysBack;
+  };
+
+  for (const seg of taskSegments) {
+    const segStartMs = new Date(seg.startTime).getTime();
+    const segEndMs = seg.endTime ? new Date(seg.endTime).getTime() : anchor.getTime();
+    if (!(Number.isFinite(segStartMs) && Number.isFinite(segEndMs) && segEndMs > segStartMs)) continue;
+
+    // Iterate across each day the segment touches (bounded by daysBack window)
+    // Start from local day of seg.startTime to local day of segEndMs
+    const startDay = localDayKey(new Date(segStartMs));
+    const endDay = localDayKey(new Date(segEndMs));
+
+    // Simple day loop (max 60-ish iterations in practice)
+    let d = startOfDayLocal(startDay);
+    const endD = startOfDayLocal(endDay);
+    for (; d.getTime() <= endD.getTime(); d = addDaysLocal(d, 1)) {
+      const day = localDayKey(d);
+      if (!dayInRange(day)) continue;
+      const clip = clipMsToDay(segStartMs, segEndMs, day);
+      if (!clip) continue;
+      const seconds = clampInt((clip.endMs - clip.startMs) / 1000);
+      if (seconds <= 0) continue;
+
+      const tag = tagBySegmentId.get(seg.id);
+      const corporation_id = tag?.corporationId ?? null;
+      const task_type = tag?.taskType ?? null;
+      const task_type_detail = tag?.taskTypeDetail ?? null;
+      const corpName = corporation_id ? corpNameById.get(corporation_id) : undefined;
+      const taskLabel =
+        task_type && String(task_type).trim()
+          ? formatTaskType(task_type, task_type_detail)
+          : undefined;
+
+      const label =
+        corpName || taskLabel
+          ? [corpName, taskLabel].filter(Boolean).join(' · ')
+          : 'Untagged task block';
+
+      const key = `${day}||${label}`;
+      const existing = byKey.get(key);
+      if (existing) {
+        existing.seconds += seconds;
+      } else {
+        byKey.set(key, {
+          day,
+          corporation_id,
+          task_type,
+          task_type_detail,
+          label,
+          seconds,
+        });
+      }
+    }
+  }
+
+  return [...byKey.values()];
 }
 
 function buildUserAppDaily(activities: ActivityEntry[], daysBack: number, anchorIso: string) {
@@ -233,6 +353,22 @@ export function useSupabaseSync(enabled: boolean) {
             updated_at: nowIso,
           })),
           'user_id,day,project_name'
+        );
+
+        const taskBlocksDaily = buildUserTaskBlockDaily(taskSegments, blockTags, corporations, 30, anchorIso);
+        await upsertAll(
+          'user_task_block_daily',
+          taskBlocksDaily.map((r) => ({
+            user_id: uid,
+            day: r.day,
+            corporation_id: r.corporation_id,
+            task_type: r.task_type,
+            task_type_detail: r.task_type_detail,
+            label: r.label,
+            seconds: clampInt(r.seconds),
+            updated_at: nowIso,
+          })),
+          'user_id,day,label'
         );
 
         const taskLabel = currentTaskLabel(taskSegments, blockTags, corporations);

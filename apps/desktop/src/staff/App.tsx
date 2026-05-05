@@ -1,8 +1,4 @@
-import { useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { useAutomaticTracking } from './useAutomaticTracking';
-import { useTaskCheckInScheduler } from './useTaskCheckInScheduler';
-import { useSupabaseSync } from './useSupabaseSync';
 import { useStore } from './store/useStore';
 import Sidebar from './components/Sidebar';
 import Dashboard from './components/Dashboard';
@@ -11,25 +7,12 @@ import Review from './components/Review';
 import Projects from './components/Projects';
 import Reports from './components/Reports';
 import TaskCheckInPanel from './components/TaskCheckInPanel';
+import CurrentUserMenu from '../components/CurrentUserMenu';
 
 export default function App() {
   const [searchParams] = useSearchParams();
   const isCheckIn = searchParams.has('checkin');
-  const { currentView, tickTimers, hydrate } = useStore();
-
-  useTaskCheckInScheduler(!isCheckIn);
-  useAutomaticTracking(!isCheckIn);
-  useSupabaseSync(!isCheckIn);
-
-  // Tick all active timers every second
-  useEffect(() => {
-    const interval = setInterval(tickTimers, 1000);
-    return () => clearInterval(interval);
-  }, [tickTimers]);
-
-  useEffect(() => {
-    void hydrate();
-  }, [hydrate]);
+  const { currentView } = useStore();
 
   if (isCheckIn) {
     return <TaskCheckInPanel />;
@@ -56,7 +39,10 @@ export default function App() {
           <div className="w-3 h-3 rounded-full bg-green-500/80 hover:bg-green-500 cursor-pointer transition-colors" /> */}
         </div>
         <div className="absolute inset-x-0 flex items-center justify-center pointer-events-none">
-          <span className="text-white/20 text-[11px] font-medium">MVPTracker — Staff</span>
+          <span className="text-white/20 text-[11px] font-medium">MVPTime — Staff</span>
+        </div>
+        <div className="ml-auto flex items-center gap-2 select-auto">
+          <CurrentUserMenu variant="titlebar" />
         </div>
       </div>
 

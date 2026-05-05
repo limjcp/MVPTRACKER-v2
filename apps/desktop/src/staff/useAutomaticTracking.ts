@@ -5,6 +5,7 @@ import { useStore } from './store/useStore';
 import type { ActivityEntry, AppSettings } from './types';
 import { ACTIVITY_MERGE_GAP_MINUTES, titleMergeKey } from './utils/activityMerge';
 import { inferAppCategory, inferProductivityFromCategory } from './utils/appCategories';
+import { inferSystemProjectName, resolveProjectIdForSystemName } from './utils/systemProjects';
 
 /** Extract http(s) URL from window title when present (browsers rarely expose real tab URL). */
 export function urlFromWindowTitle(title: string): string | undefined {
@@ -46,7 +47,8 @@ function findResumableActivity(
 function isExcluded(processName: string, title: string, exclusionList: string[]): boolean {
   const p = normProcess(processName);
   if (!p.trim() && !title.trim()) return true;
-  if (p === 'mvptracker') return true;
+  // Don't track our own app window.
+  if (p === 'mvptime' || p === 'mvptracker') return true;
   for (const raw of exclusionList) {
     const e = normProcess(raw) || raw.trim().toLowerCase();
     if (!e) continue;
@@ -232,6 +234,11 @@ export function useAutomaticTracking(enabled = true) {
         currentSliceIdRef.current = id;
 
         const category = inferAppCategory(app, title);
+        const inferredProject = inferSystemProjectName(app, title, category);
+        const projectId = resolveProjectIdForSystemName(
+          inferredProject,
+          useStore.getState().projects
+        );
         const entry: ActivityEntry = {
           id,
           appName: app,
@@ -243,6 +250,7 @@ export function useAutomaticTracking(enabled = true) {
           category,
           productivity: inferProductivityFromCategory(category),
           type: 'automatic',
+          ...(projectId ? { projectId } : {}),
         };
         addActivity(entry);
       } catch {

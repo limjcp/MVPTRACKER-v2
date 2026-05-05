@@ -11,7 +11,6 @@ import {
   CloudOff,
   RefreshCw,
   Timer,
-  Square,
   Plus,
   Users,
 } from 'lucide-react';
@@ -39,9 +38,6 @@ export default function Sidebar() {
     currentView,
     setView,
     setReviewProjectFilter,
-    activeTimers,
-    stopTimer,
-    startTimer,
     projects,
     activities,
     manualEntries,
@@ -83,7 +79,7 @@ export default function Sidebar() {
           <Timer className="w-5 h-5 text-white" />
         </div>
         <div className="min-w-0">
-          <h1 className="text-white font-semibold text-[15px] leading-none">MVPTracker</h1>
+          <h1 className="text-white font-semibold text-[15px] leading-none">MVPTime</h1>
           <p className="text-white/40 text-[11px] mt-0.5 truncate">Automatic Time Tracker</p>
         </div>
       </div>
@@ -251,51 +247,6 @@ export default function Sidebar() {
             </div>
           </div>
         </div>
-      </div>
-
-      <div className="px-3 pb-2 border-t border-white/[0.06] pt-3 flex-shrink-0">
-        <div className="flex items-center justify-between px-1 mb-2">
-          <span className="text-white/30 text-[11px] font-semibold uppercase tracking-wider">Manual Timers</span>
-          <button
-            type="button"
-            onClick={() => {
-              const project = projects[0];
-              if (project) startTimer(project.id, 'New Task');
-            }}
-            className="w-5 h-5 rounded-md bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors"
-          >
-            <Plus className="w-3 h-3 text-white/60" />
-          </button>
-        </div>
-
-        {activeTimers.length === 0 ? (
-          <div className="text-white/20 text-[11px] text-center py-2">No active timers</div>
-        ) : (
-          <div className="space-y-1.5 max-h-32 overflow-y-auto">
-            {activeTimers.map((timer) => {
-              const project = projects.find((p) => p.id === timer.projectId);
-              const colors = project ? PROJECT_COLORS[project.color] : PROJECT_COLORS.blue;
-              return (
-                <div key={timer.id} className="flex items-center gap-2 px-2.5 py-2 rounded-xl bg-white/[0.04] group">
-                  <div className={cn('w-2 h-2 rounded-full flex-shrink-0 animate-pulse', colors.bg)} />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-white/70 text-[11px] truncate">{timer.title || project?.name}</p>
-                    <p className={cn('text-[11px] font-mono font-medium', colors.text)}>
-                      {formatDurationLong(timer.elapsed)}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => stopTimer(timer.id)}
-                    className="w-5 h-5 rounded-md bg-red-500/20 hover:bg-red-500/40 flex items-center justify-center transition-colors opacity-0 group-hover:opacity-100"
-                  >
-                    <Square className="w-2.5 h-2.5 text-red-400 fill-red-400" />
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        )}
       </div>
 
       <div className="px-3 pb-4 border-t border-white/[0.06] pt-3 flex-shrink-0">

@@ -139,7 +139,7 @@ function sanitizeKey(name: string): string {
 }
 
 export function reportFilenameBase(startDate: string, endDate: string): string {
-  return `mvptracker-report-${startDate}_to_${endDate}`;
+  return `mvptime-report-${startDate}_to_${endDate}`;
 }
 
 export function downloadBlob(blob: Blob, filename: string): void {

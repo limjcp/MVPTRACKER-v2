@@ -314,13 +314,13 @@ export default function Settings() {
                 <div className="flex items-center justify-between py-2 border-b border-white/[0.04]">
                   <span className="text-white/50 text-xs">Storage Engine</span>
                   <span className="text-white/70 text-xs font-medium flex items-center gap-1.5">
-                    <Database className="w-3 h-3" />SQLite (shared MVPTracker folder)
+                    <Database className="w-3 h-3" />SQLite (shared MVPTime folder)
                   </span>
                 </div>
                 <div className="flex items-center justify-between py-2 border-b border-white/[0.04]">
                   <span className="text-white/50 text-xs">Database Location</span>
                   <span className="text-white/30 text-[10px] font-mono text-right max-w-[200px]">
-                    %LOCALAPPDATA%\MVPTracker\mvptracker.sqlite3
+                    %LOCALAPPDATA%\\MVPTime\\mvptime.sqlite3
                   </span>
                 </div>
               </div>
@@ -384,14 +384,14 @@ export default function Settings() {
 
         {activeTab === 'about' && (
           <div className="max-w-xl space-y-6">
-            <h3 className="text-white text-lg font-semibold">About MVPTracker</h3>
+            <h3 className="text-white text-lg font-semibold">About MVPTime</h3>
 
             <div className="flex items-center gap-4 p-5 rounded-2xl bg-gradient-to-br from-violet-500/10 to-blue-600/10 border border-violet-500/20">
               <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-violet-500 to-blue-600 flex items-center justify-center shadow-lg shadow-violet-900/40">
                 <Clock className="w-7 h-7 text-white" />
               </div>
               <div>
-                <h4 className="text-white font-semibold text-lg">MVPTracker</h4>
+                <h4 className="text-white font-semibold text-lg">MVPTime</h4>
                 <p className="text-white/40 text-sm">Admin · shared settings with Staff</p>
                 <p className="text-violet-400 text-xs mt-1">Version 2.0.0</p>
               </div>

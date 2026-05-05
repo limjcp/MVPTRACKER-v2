@@ -6,6 +6,7 @@ import '@fontsource/jetbrains-mono/latin-400.css';
 import '@fontsource/jetbrains-mono/latin-500.css';
 import './index.css';
 import App from './App';
+import ErrorBoundary from './components/ErrorBoundary';
 import { installNativeShellGuards } from './nativeShell';
 import { supabase } from './lib/supabase';
 import { LS_PERSIST_SESSION } from './lib/userRole';
@@ -31,7 +32,9 @@ void bootstrapAuth().then(() => {
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
       <BrowserRouter>
-        <App />
+        <ErrorBoundary>
+          <App />
+        </ErrorBoundary>
       </BrowserRouter>
     </StrictMode>
   );

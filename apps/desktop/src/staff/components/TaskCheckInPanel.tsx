@@ -110,6 +110,14 @@ function buildStillOnLines(
   return { headline, detail };
 }
 
+function safeGetCurrentWindow() {
+  try {
+    return getCurrentWebviewWindow();
+  } catch {
+    return null;
+  }
+}
+
 export default function TaskCheckInPanel() {
   const defaultNo = useMemo(() => readDefaultNo(), []);
   const [step, setStep] = useState<Step>(() => (defaultNo ? 'newTask' : 'ask'));
@@ -145,7 +153,16 @@ export default function TaskCheckInPanel() {
 
   useEffect(() => {
     if (!isTauri()) return;
-    void prepareTaskCheckInWindow(getCurrentWebviewWindow());
+    const tryPrepare = async () => {
+      const w = safeGetCurrentWindow();
+      if (!w) return;
+      await prepareTaskCheckInWindow(w);
+    };
+    void tryPrepare().catch(() => {
+      window.setTimeout(() => {
+        void tryPrepare().catch(() => {});
+      }, 250);
+    });
   }, []);
 
   const corpsById = useMemo(
@@ -178,7 +195,8 @@ export default function TaskCheckInPanel() {
 
   const closeWindow = async () => {
     if (!isTauri()) return;
-    const w = getCurrentWebviewWindow();
+    const w = safeGetCurrentWindow();
+    if (!w) return;
     try {
       await w.close();
     } catch {
@@ -191,7 +209,12 @@ export default function TaskCheckInPanel() {
   };
 
   const notifyMain = async () => {
-    if (isTauri()) await emit('task-checkin-answered', {});
+    if (!isTauri()) return;
+    try {
+      await emit('task-checkin-answered', {});
+    } catch {
+      // ignore
+    }
   };
 
   const onYes = async () => {

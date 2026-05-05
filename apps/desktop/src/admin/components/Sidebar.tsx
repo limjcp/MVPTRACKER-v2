@@ -32,7 +32,7 @@ export default function Sidebar({
           <Timer className="w-5 h-5 text-white" />
         </div>
         <div>
-          <h1 className="text-white font-semibold text-[15px] leading-none">MVPTracker</h1>
+          <h1 className="text-white font-semibold text-[15px] leading-none">MVPTime</h1>
           <p className="text-white/40 text-[11px] mt-0.5">Admin Portal</p>
         </div>
       </div>
@@ -60,7 +60,7 @@ export default function Sidebar({
         })}
       </nav>
 
-      <div className="px-3 pb-10 border-t border-white/[0.06] pt-3 mt-auto">
+      <div className="px-3 border-t border-white/[0.06] pt-3 pb-10 mt-auto">
         <button
           type="button"
           onClick={() => navigate('/')}

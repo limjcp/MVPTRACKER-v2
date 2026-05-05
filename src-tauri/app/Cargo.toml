@@ -1,5 +1,5 @@
 [package]
-name = "mvptracker"
+name = "mvptime"
 version = "0.1.0"
 description = "A Tauri App"
 authors = ["you"]
@@ -23,8 +23,11 @@ serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 tauri = { version = "2.10.3", features = ["tray-icon"] }
 tauri-plugin-log = "2"
-mvptracker_core = { path = "../../crates/core" }
+mvptime_core = { path = "../../crates/core" }
 tauri-plugin-dialog = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+chrono = "0.4"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = [

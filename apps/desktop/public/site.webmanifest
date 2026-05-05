@@ -1,6 +1,6 @@
 {
-  "name": "MVPTracker",
-  "short_name": "MVPTracker",
+  "name": "MVPTime",
+  "short_name": "MVPTime",
   "icons": [
     {
       "src": "/pwa-192x192.png",

@@ -4,21 +4,64 @@ import { AnimatePresence, motion } from 'motion/react';
 import { Loader2 } from 'lucide-react';
 import { cn } from '../utils/cn';
 import { supabase } from '../lib/supabase';
-import { AppUserRole, fetchUserRole, LS_PERSIST_SESSION } from '../lib/userRole';
+import { AppUserRole, fetchUserRole, LS_PERSIST_SESSION, LS_PERSIST_SESSION_LEGACY } from '../lib/userRole';
 import AppIntro from './splash/AppIntro';
 
-const INTRO_SESSION_KEY = 'mvptracker_intro_launched';
-const LS_REMEMBER = 'mvptracker_remember_email';
-const LS_EMAIL = 'mvptracker_saved_email';
+const INTRO_SESSION_KEY = 'mvptime_intro_launched';
+const INTRO_SESSION_KEY_LEGACY = 'mvptracker_intro_launched';
+const LS_REMEMBER = 'mvptime_remember_email';
+const LS_REMEMBER_LEGACY = 'mvptracker_remember_email';
+const LS_EMAIL = 'mvptime_saved_email';
+const LS_EMAIL_LEGACY = 'mvptracker_saved_email';
+
+function readSessionStorage(key: string): string | null {
+  try {
+    return sessionStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function readLocalStorage(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeLocalStorage(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* ignore */
+  }
+}
+
+function removeLocalStorage(key: string) {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    /* ignore */
+  }
+}
 
 type Portal = 'staff' | 'admin';
 
 function readIntroSkipped(): boolean {
-  try {
-    return sessionStorage.getItem(INTRO_SESSION_KEY) === '1';
-  } catch {
-    return false;
+  const v = readSessionStorage(INTRO_SESSION_KEY);
+  if (v != null) return v === '1';
+  const legacy = readSessionStorage(INTRO_SESSION_KEY_LEGACY);
+  if (legacy != null) {
+    // Migrate forward.
+    try {
+      sessionStorage.setItem(INTRO_SESSION_KEY, legacy);
+    } catch {
+      /* ignore */
+    }
+    return legacy === '1';
   }
+  return false;
 }
 
 export default function LoginPage() {
@@ -26,22 +69,24 @@ export default function LoginPage() {
   const [phase, setPhase] = useState<'intro' | 'login'>(() => (readIntroSkipped() ? 'login' : 'intro'));
 
   const [email, setEmail] = useState(() => {
-    try {
-      if (localStorage.getItem(LS_REMEMBER) === '1') {
-        return localStorage.getItem(LS_EMAIL) ?? '';
-      }
-    } catch {
-      /* ignore */
+    const remember = readLocalStorage(LS_REMEMBER) ?? readLocalStorage(LS_REMEMBER_LEGACY);
+    const saved = readLocalStorage(LS_EMAIL) ?? readLocalStorage(LS_EMAIL_LEGACY);
+    if (remember === '1') {
+      // Migrate keys forward.
+      writeLocalStorage(LS_REMEMBER, '1');
+      if (saved != null) writeLocalStorage(LS_EMAIL, saved);
+      return saved ?? '';
     }
     return '';
   });
   const [password, setPassword] = useState('');
   const [rememberMe, setRememberMe] = useState(() => {
-    try {
-      return localStorage.getItem(LS_REMEMBER) === '1';
-    } catch {
-      return false;
+    const remember = readLocalStorage(LS_REMEMBER) ?? readLocalStorage(LS_REMEMBER_LEGACY);
+    if (remember === '1') {
+      writeLocalStorage(LS_REMEMBER, '1');
+      return true;
     }
+    return false;
   });
 
   const [statusText, setStatusText] = useState<string>('Signed out');
@@ -156,16 +201,17 @@ export default function LoginPage() {
   };
 
   const persistRemember = (nextRemember: boolean, nextEmail: string) => {
-    try {
-      if (nextRemember) {
-        localStorage.setItem(LS_REMEMBER, '1');
-        localStorage.setItem(LS_EMAIL, nextEmail);
-      } else {
-        localStorage.removeItem(LS_REMEMBER);
-        localStorage.removeItem(LS_EMAIL);
-      }
-    } catch {
-      /* ignore */
+    if (nextRemember) {
+      writeLocalStorage(LS_REMEMBER, '1');
+      writeLocalStorage(LS_EMAIL, nextEmail);
+      // Clear legacy keys so only one source of truth.
+      removeLocalStorage(LS_REMEMBER_LEGACY);
+      removeLocalStorage(LS_EMAIL_LEGACY);
+    } else {
+      removeLocalStorage(LS_REMEMBER);
+      removeLocalStorage(LS_EMAIL);
+      removeLocalStorage(LS_REMEMBER_LEGACY);
+      removeLocalStorage(LS_EMAIL_LEGACY);
     }
   };
 
@@ -173,6 +219,7 @@ export default function LoginPage() {
     try {
       if (nextRemember) {
         localStorage.setItem(LS_PERSIST_SESSION, '1');
+        localStorage.removeItem(LS_PERSIST_SESSION_LEGACY);
       } else {
         localStorage.setItem(LS_PERSIST_SESSION, '0');
       }
@@ -184,6 +231,7 @@ export default function LoginPage() {
   const clearPersistSessionFlag = () => {
     try {
       localStorage.removeItem(LS_PERSIST_SESSION);
+      localStorage.removeItem(LS_PERSIST_SESSION_LEGACY);
     } catch {
       /* ignore */
     }
@@ -221,7 +269,7 @@ export default function LoginPage() {
         <div className="w-full max-w-md sm:max-w-lg rounded-2xl border border-white/12 bg-white/[0.07] p-6 shadow-[0_24px_80px_rgba(0,0,0,0.55),0_0_0_1px_rgba(255,255,255,0.04)_inset] backdrop-blur-2xl sm:p-8">
           <div className="mb-8 text-center">
             <h1 className="font-sans text-xl font-semibold tracking-tight text-white">MVP Condos</h1>
-            <p className="font-tech mt-2 text-xs text-sky-200/45">MVPTracker · sign in to continue</p>
+            <p className="font-tech mt-2 text-xs text-sky-200/45">MVPTime · sign in to continue</p>
           </div>
 
           <p className="font-tech mb-6 min-h-[2.5rem] text-[11px] leading-relaxed text-white/40">

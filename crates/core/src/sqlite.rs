@@ -1,7 +1,8 @@
 use rusqlite::{params, Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
+use std::hash::{Hash, Hasher};
 use std::path::Path;
-use chrono::{DateTime, Duration, FixedOffset};
+use chrono::{DateTime, Duration, FixedOffset, Utc};
 
 pub fn open_db(path: &Path) -> rusqlite::Result<Connection> {
   Connection::open_with_flags(
@@ -96,6 +97,70 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
   "#,
   )?;
   add_schema_columns(conn)?;
+  seed_default_corporations(conn)?;
+  Ok(())
+}
+
+fn stable_seed_corporation_id(name: &str) -> String {
+  use std::collections::hash_map::DefaultHasher;
+  let key = name.trim().to_lowercase();
+  let mut h = DefaultHasher::new();
+  key.hash(&mut h);
+  format!("seed-corp-{:016x}", h.finish())
+}
+
+/// Inserts MVPTracker default corporation names when missing (case-insensitive name match).
+pub fn seed_default_corporations(conn: &Connection) -> rusqlite::Result<()> {
+  const NAMES: &[&str] = &[
+    "MVP Condos",
+    "WNCC 47",
+    "WNCC 87",
+    "WNCC 97",
+    "AWST",
+    "SSCC 168",
+    "SSCC 148",
+    "WNCC 127",
+    "WNCC 134",
+    "WNCC 149",
+    "TALLPINES",
+    "NCC 2",
+    "PCC 7",
+    "WSCC 449",
+    "WNCC 63",
+    "WCC 75",
+    "WVLCC 678",
+    "WSCC 179",
+    "NSCC 42",
+    "WNCC 112",
+    "WSCC 6",
+    "ECC 3",
+    "WNCC 150",
+    "WSCC 491",
+    "WSCC 406",
+    "HVLCC 21",
+    "HSCC 17",
+    "WNCC 147",
+  ];
+  let now = Utc::now().to_rfc3339();
+  for &name in NAMES {
+    let exists: bool = conn.query_row(
+      "SELECT EXISTS(SELECT 1 FROM corporations WHERE lower(trim(name)) = lower(trim(?1)))",
+      params![name],
+      |r| r.get(0),
+    )?;
+    if exists {
+      continue;
+    }
+    let id = stable_seed_corporation_id(name);
+    upsert_corporation(
+      conn,
+      &CorporationRow {
+        id,
+        name: name.to_string(),
+        created_at: now.clone(),
+      },
+    )?;
+  }
   Ok(())
 }
 
@@ -629,9 +694,12 @@ pub fn ensure_open_task_segment(
     if let (Some(now_dt), Some(anchor_dt)) = (now_dt, anchor_dt) {
       let gap = now_dt.signed_duration_since(anchor_dt);
       if gap > Duration::seconds(max_gap_seconds as i64) {
-        let close_dt = std::cmp::min(now_dt, anchor_dt + Duration::seconds(60));
-        let close_iso = close_dt.to_rfc3339();
-        close_task_segment(conn, &open.id, &close_iso)?;
+        // If the app was away longer than `max_gap_seconds`, do NOT bridge downtime.
+        // Close the previous open segment at the last known active time (+ grace),
+        // but never later than `now`.
+        let grace_end = anchor_dt + Duration::seconds(max_gap_seconds as i64);
+        let close_dt = if grace_end > now_dt { now_dt } else { grace_end };
+        close_task_segment(conn, &open.id, &close_dt.to_rfc3339())?;
 
         let row = TaskSegmentRow {
           id: new_id.to_string(),
@@ -690,12 +758,16 @@ mod tests {
     let open = get_open_task_segment(&conn).unwrap().unwrap();
     assert_eq!(open.id, "new");
 
-    // Verify old row end_time was set.
+    // Verify old row end_time was capped at lastPromptAt + maxGap (not at `now`).
     let mut stmt = conn
       .prepare("SELECT end_time FROM task_segments WHERE id = ?1")
       .unwrap();
     let end_time: Option<String> = stmt.query_row(params!["old"], |r| r.get(0)).unwrap();
-    assert!(end_time.is_some());
+    assert_eq!(
+      end_time.as_deref(),
+      Some("2026-04-27T10:10:00+00:00"),
+      "expected old segment end_time to be capped at last_prompt_at + 5 minutes"
+    );
   }
 
   #[test]

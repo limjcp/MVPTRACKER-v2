@@ -51,6 +51,6 @@ jobs:
       - name: Upload bundles
         uses: actions/upload-artifact@v6
         with:
-          name: mvptracker-${{ matrix.os }}
+          name: mvptime-${{ matrix.os }}
           path: |
             src-tauri/app/target/release/bundle/**

@@ -6,7 +6,6 @@ import {
   ManualEntry,
   CalendarEvent,
   DailyStats,
-  ActiveTimer,
   AppSettings,
   ViewType,
   TimelineBlock,
@@ -21,20 +20,32 @@ import {
   mergeOverlappingTimelineBlocks,
 } from './derive';
 import { normalizeStoredCategory } from '../utils/appCategories';
+import { SYSTEM_PROJECT_SPECS, buildSystemProjectRow } from '../utils/systemProjects';
 
 /** Timeline vertical zoom; persisted in localStorage across views and reloads. */
 export const TIMELINE_ZOOM_MIN = 0.125;
 export const TIMELINE_ZOOM_MAX = 48;
-const TIMELINE_ZOOM_STORAGE_KEY = 'mvptracker:timelineZoom';
+const TIMELINE_ZOOM_STORAGE_KEY = 'mvptime:timelineZoom';
+const TIMELINE_ZOOM_STORAGE_KEY_LEGACY = 'mvptracker:timelineZoom';
 
 function readStoredTimelineZoom(): number {
   if (typeof localStorage === 'undefined') return 1;
   try {
-    const raw = localStorage.getItem(TIMELINE_ZOOM_STORAGE_KEY);
+    const raw =
+      localStorage.getItem(TIMELINE_ZOOM_STORAGE_KEY) ??
+      localStorage.getItem(TIMELINE_ZOOM_STORAGE_KEY_LEGACY);
     if (raw == null || raw === '') return 1;
     const n = Number.parseFloat(raw);
     if (!Number.isFinite(n)) return 1;
-    return Math.min(TIMELINE_ZOOM_MAX, Math.max(TIMELINE_ZOOM_MIN, Math.round(n * 1000) / 1000));
+    const v = Math.min(TIMELINE_ZOOM_MAX, Math.max(TIMELINE_ZOOM_MIN, Math.round(n * 1000) / 1000));
+    // Migrate forward.
+    try {
+      localStorage.setItem(TIMELINE_ZOOM_STORAGE_KEY, String(v));
+      localStorage.removeItem(TIMELINE_ZOOM_STORAGE_KEY_LEGACY);
+    } catch {
+      // ignore
+    }
+    return v;
   } catch {
     return 1;
   }
@@ -287,11 +298,6 @@ interface AppState {
   calendarEvents: CalendarEvent[];
   recordCalendarEvent: (eventId: string, projectId: string) => void;
 
-  activeTimers: ActiveTimer[];
-  startTimer: (projectId: string, title?: string) => void;
-  stopTimer: (timerId: string) => void;
-  tickTimers: () => void;
-
   dailyStats: DailyStats[];
   timelineBlocks: TimelineBlock[];
 
@@ -394,7 +400,16 @@ export const useStore = create<AppState>((set, get) => ({
     await invoke('db_init');
 
     const rows = await invoke<any[]>('db_list_projects');
-    const projects = rows.map(fromProjectRow);
+    let projects = rows.map(fromProjectRow);
+    const projectNamesLower = new Set(projects.map((p) => p.name.trim().toLowerCase()));
+    for (const spec of SYSTEM_PROJECT_SPECS) {
+      const key = spec.name.trim().toLowerCase();
+      if (projectNamesLower.has(key)) continue;
+      const np = buildSystemProjectRow(spec);
+      await invoke('db_upsert_project', { project: toProjectRow(np) });
+      projects = [...projects, np];
+      projectNamesLower.add(key);
+    }
 
     const settingsJson = await invoke<string | null>('db_get_settings');
     const settings = settingsJson ? (JSON.parse(settingsJson) as AppSettings) : defaultSettings;
@@ -722,48 +737,6 @@ export const useStore = create<AppState>((set, get) => ({
         e.id === eventId ? { ...e, recorded: true, projectId } : e
       ),
     })),
-
-  activeTimers: [],
-  startTimer: (projectId, title) => {
-    const timer: ActiveTimer = {
-      id: crypto.randomUUID(),
-      projectId,
-      startTime: new Date().toISOString(),
-      elapsed: 0,
-      running: true,
-      title,
-    };
-    set((state) => ({ activeTimers: [...state.activeTimers, timer] }));
-  },
-  stopTimer: (timerId) => {
-    const timer = get().activeTimers.find((t) => t.id === timerId);
-    if (!timer) return;
-    const entry: ManualEntry = {
-      id: crypto.randomUUID(),
-      title: timer.title || 'Manual Timer',
-      projectId: timer.projectId,
-      startTime: timer.startTime,
-      endTime: new Date().toISOString(),
-      duration: timer.elapsed,
-      type: 'manual',
-    };
-    set((state) => {
-      const manualEntries = [...state.manualEntries, entry];
-      if (isTauriRuntime()) void invoke('db_add_manual_entry', { entry: toManualEntryRow(entry) });
-      return {
-        activeTimers: state.activeTimers.filter((t) => t.id !== timerId),
-        manualEntries,
-        ...derivedFrom(state.selectedDate, state.activities, manualEntries, state.projects, state.blockTags, state.taskSegments, new Date().toISOString(), state.settings.idleThreshold),
-      };
-    });
-  },
-  tickTimers: () => {
-    set((state) => ({
-      activeTimers: state.activeTimers.map((t) =>
-        t.running ? { ...t, elapsed: t.elapsed + 1 } : t
-      ),
-    }));
-  },
 
   dailyStats: emptyDerived.dailyStats,
   timelineBlocks: emptyDerived.timelineBlocks,

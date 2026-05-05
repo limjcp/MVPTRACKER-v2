@@ -3,6 +3,7 @@
  * On Windows, sets RC for embed-resource / tauri-winres (see scripts/windows-rc.cjs).
  */
 const { spawnSync } = require('child_process');
+const fs = require('fs');
 const path = require('path');
 const { applyRcToEnv } = require('./windows-rc.cjs');
 
@@ -25,10 +26,43 @@ if (process.platform === 'win32') {
   }
 }
 
-const result = spawnSync('npx', ['tauri', 'dev'], {
-  cwd: appDir,
-  stdio: 'inherit',
-  shell: true,
-  env,
-});
-process.exit(result.status ?? 1);
+// IMPORTANT: run the repo-local @tauri-apps/cli binary directly.
+// `npx` / `npm exec` may attempt network resolution depending on npm version/config.
+const tauriBin =
+  process.platform === 'win32'
+    ? path.join(root, 'node_modules', '.bin', 'tauri.cmd')
+    : path.join(root, 'node_modules', '.bin', 'tauri');
+
+if (!fs.existsSync(tauriBin)) {
+  console.error('[tauri-dev] Missing local tauri CLI. Run `npm ci` at repo root first.');
+  process.exit(1);
+}
+
+try {
+  const isWindowsCmdShim = process.platform === 'win32' && tauriBin.toLowerCase().endsWith('.cmd');
+
+  const command = isWindowsCmdShim ? 'cmd.exe' : tauriBin;
+  // Pass the .cmd shim as a distinct argument to avoid nested-quote parsing issues.
+  const args = isWindowsCmdShim ? ['/d', '/c', tauriBin, 'dev'] : ['dev'];
+
+  const result = spawnSync(command, args, {
+    cwd: appDir,
+    stdio: 'inherit',
+    shell: false,
+    env,
+  });
+
+  if (result.error) {
+    console.error('[tauri-dev] Failed to spawn tauri CLI.');
+    console.error(`[tauri-dev] tauriBin: ${tauriBin}`);
+    console.error(result.error);
+    process.exit(1);
+  }
+
+  process.exit(result.status ?? 1);
+} catch (err) {
+  console.error('[tauri-dev] Unexpected error running tauri CLI.');
+  console.error(`[tauri-dev] tauriBin: ${tauriBin}`);
+  console.error(err);
+  process.exit(1);
+}

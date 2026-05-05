@@ -56,6 +56,21 @@ function activityColorWithoutProject(first: ActivityEntry | undefined): string {
   return CATEGORY_HEX[first?.category ?? 'other'] ?? '#6B7280';
 }
 
+function timelineBlockSyncedEqual(a: TimelineBlock, b: TimelineBlock): boolean {
+  return (
+    a.id === b.id &&
+    a.corporationId === b.corporationId &&
+    a.taskType === b.taskType &&
+    a.taskTypeDetail === b.taskTypeDetail &&
+    a.duration === b.duration &&
+    a.startTime === b.startTime &&
+    a.endTime === b.endTime &&
+    a.displayLabel === b.displayLabel &&
+    a.projectId === b.projectId &&
+    a.color === b.color
+  );
+}
+
 function rescaleActivityTimes(
   ids: string[],
   activities: ActivityEntry[],
@@ -307,6 +322,15 @@ export default function Timeline() {
     const aids = next ? primaryActivityIds(next) : [];
     setSelectedActivity(aids[0] ?? null);
   };
+
+  useEffect(() => {
+    setSelectedBlock((prev) => {
+      if (!prev) return prev;
+      const fresh = timelineBlocks.find((b) => b.id === prev.id);
+      if (!fresh) return null;
+      return timelineBlockSyncedEqual(prev, fresh) ? prev : fresh;
+    });
+  }, [timelineBlocks]);
 
   const timelineHeight = TOTAL_HOURS * hourHeight + 40;
 

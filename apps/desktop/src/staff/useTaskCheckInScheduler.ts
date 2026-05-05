@@ -10,7 +10,8 @@ import type { TaskSegment } from './types';
 
 const CHECKIN_MS = 15 * 60 * 1000;
 const TICK_MS = 60 * 1000;
-const LS_DAILY_CHECKIN_SHOWN_DAY = 'mvptracker:lastDailyCheckinShownDay';
+const LS_DAILY_CHECKIN_SHOWN_DAY = 'mvptime:lastDailyCheckinShownDay';
+const LS_DAILY_CHECKIN_SHOWN_DAY_LEGACY = 'mvptracker:lastDailyCheckinShownDay';
 
 /** Match TaskCheckInPanel compact layout for placement math. */
 export const TASK_CHECKIN_WINDOW_WIDTH = 360;
@@ -60,6 +61,47 @@ export async function prepareTaskCheckInWindow(w: WebviewWindow): Promise<void> 
   await restrictTaskCheckInWindowChrome(w);
 }
 
+let openInFlight = false;
+
+async function safeCloseOrDestroy(w: WebviewWindow): Promise<void> {
+  try {
+    await w.close();
+    return;
+  } catch {
+    // ignore
+  }
+  try {
+    await w.destroy();
+  } catch {
+    // ignore
+  }
+}
+
+async function createCheckInWindow(opts?: { defaultNo?: boolean }): Promise<void> {
+  const { x, y } = await logicalTopRightForCheckInWindow();
+  const w = new WebviewWindow('task-checkin', {
+    url: opts?.defaultNo ? checkInWindowUrlWithDefaultNo() : checkInWindowUrl(),
+    title: 'Task check-in',
+    width: TASK_CHECKIN_WINDOW_WIDTH,
+    height: TASK_CHECKIN_WINDOW_HEIGHT,
+    x,
+    y,
+    center: false,
+    alwaysOnTop: true,
+    resizable: false,
+    visible: true,
+    closable: false,
+    minimizable: false,
+    maximizable: false,
+  });
+  w.once('tauri://created', () => {
+    void prepareTaskCheckInWindow(w);
+  });
+  w.once('tauri://error', (e) => {
+    console.error('task-checkin window', e);
+  });
+}
+
 function checkInWindowUrl(): string {
   return `${window.location.origin}/staff?checkin=1`;
 }
@@ -101,35 +143,34 @@ function deadlineMs(segments: TaskSegment[]): number {
 }
 
 async function openOrFocusCheckInWindow(opts?: { defaultNo?: boolean }): Promise<void> {
-  const { x, y } = await logicalTopRightForCheckInWindow();
-  const existing = await WebviewWindow.getByLabel('task-checkin');
-  if (existing) {
-    await existing.show();
-    await prepareTaskCheckInWindow(existing);
-    await existing.setFocus();
-    return;
+  if (openInFlight) return;
+  openInFlight = true;
+  try {
+    const existing = await WebviewWindow.getByLabel('task-checkin');
+    if (existing) {
+      try {
+        const visible = await existing.isVisible();
+        if (visible) {
+          await existing.setFocus();
+          await prepareTaskCheckInWindow(existing);
+          return;
+        }
+      } catch {
+        await safeCloseOrDestroy(existing);
+      }
+      try {
+        await existing.show();
+        await existing.setFocus();
+        await prepareTaskCheckInWindow(existing);
+        return;
+      } catch {
+        await safeCloseOrDestroy(existing);
+      }
+    }
+    await createCheckInWindow(opts);
+  } finally {
+    openInFlight = false;
   }
-  const w = new WebviewWindow('task-checkin', {
-    url: opts?.defaultNo ? checkInWindowUrlWithDefaultNo() : checkInWindowUrl(),
-    title: 'Task check-in',
-    width: TASK_CHECKIN_WINDOW_WIDTH,
-    height: TASK_CHECKIN_WINDOW_HEIGHT,
-    x,
-    y,
-    center: false,
-    alwaysOnTop: true,
-    resizable: false,
-    visible: true,
-    closable: false,
-    minimizable: false,
-    maximizable: false,
-  });
-  w.once('tauri://created', () => {
-    void prepareTaskCheckInWindow(w);
-  });
-  w.once('tauri://error', (e) => {
-    console.error('task-checkin window', e);
-  });
 }
 
 /**
@@ -138,17 +179,26 @@ async function openOrFocusCheckInWindow(opts?: { defaultNo?: boolean }): Promise
 export function useTaskCheckInScheduler(enabled: boolean) {
   const reloadTaskSegments = useStore((s) => s.reloadTaskSegments);
   const refreshDerivedTimeline = useStore((s) => s.refreshDerivedTimeline);
+  const taskSegments = useStore((s) => s.taskSegments);
 
   useEffect(() => {
     if (!enabled || !isTauri()) return;
-    const segments = useStore.getState().taskSegments;
-    if (segments.length === 0) return;
+    if (taskSegments.length === 0) return;
 
     const today = localDayKey(new Date());
-    if (safeGetLocalStorage(LS_DAILY_CHECKIN_SHOWN_DAY) === today) return;
-    safeSetLocalStorage(LS_DAILY_CHECKIN_SHOWN_DAY, today);
-    void openOrFocusCheckInWindow({ defaultNo: true });
-  }, [enabled]);
+    const shown =
+      safeGetLocalStorage(LS_DAILY_CHECKIN_SHOWN_DAY) ??
+      safeGetLocalStorage(LS_DAILY_CHECKIN_SHOWN_DAY_LEGACY);
+    if (shown === today) {
+      // Ensure we migrate forward so only one key is used long-term.
+      safeSetLocalStorage(LS_DAILY_CHECKIN_SHOWN_DAY, today);
+      return;
+    }
+
+    void openOrFocusCheckInWindow({ defaultNo: true }).then(() => {
+      safeSetLocalStorage(LS_DAILY_CHECKIN_SHOWN_DAY, today);
+    });
+  }, [enabled, taskSegments]);
 
   useEffect(() => {
     if (!isTauri()) return;

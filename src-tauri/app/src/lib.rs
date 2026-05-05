@@ -1,6 +1,7 @@
 mod active_window;
 
 use std::path::PathBuf;
+use chrono::Utc;
 use serde::Serialize;
 use tauri::Manager;
 use tauri::WindowEvent;
@@ -11,6 +12,28 @@ struct DbPath(PathBuf);
 
 const TRAY_MENU_TOGGLE: &str = "toggle_main";
 const TRAY_MENU_QUIT: &str = "quit";
+
+fn close_open_task_segment_best_effort(app: &tauri::AppHandle) {
+  let now_iso = Utc::now().to_rfc3339();
+  let db = match app.try_state::<DbPath>() {
+    Some(s) => s,
+    None => return,
+  };
+  let conn = match mvptime_core::sqlite::open_db(&db.0) {
+    Ok(c) => c,
+    Err(_) => return,
+  };
+  if mvptime_core::sqlite::migrate(&conn).is_err() {
+    return;
+  }
+  let open = match mvptime_core::sqlite::get_open_task_segment(&conn) {
+    Ok(s) => s,
+    Err(_) => return,
+  };
+  if let Some(s) = open {
+    let _ = mvptime_core::sqlite::close_task_segment(&conn, &s.id, &now_iso);
+  }
+}
 
 fn hide_main_window(window: &tauri::WebviewWindow) {
   let _ = window.hide();
@@ -46,7 +69,10 @@ fn build_tray(app: &tauri::AppHandle) -> Result<(), tauri::Error> {
     .menu(&menu)
     .on_menu_event(|app, event| match event.id().as_ref() {
       TRAY_MENU_TOGGLE => toggle_main_window(app),
-      TRAY_MENU_QUIT => app.exit(0),
+      TRAY_MENU_QUIT => {
+        close_open_task_segment_best_effort(app);
+        app.exit(0)
+      }
       _ => {}
     })
     .build(app)?;
@@ -58,6 +84,8 @@ fn build_tray(app: &tauri::AppHandle) -> Result<(), tauri::Error> {
 pub fn run() {
   tauri::Builder::default()
     .plugin(tauri_plugin_dialog::init())
+    .plugin(tauri_plugin_process::init())
+    .plugin(tauri_plugin_updater::Builder::new().build())
     .on_window_event(|window, event| {
       if window.label() != "main" {
         return;
@@ -109,11 +137,11 @@ pub fn run() {
         )?;
       }
 
-      let shared = mvptracker_core::paths::shared_database_path();
+      let shared = mvptime_core::paths::shared_database_path();
       if let Some(parent) = shared.parent() {
         std::fs::create_dir_all(parent)?;
       }
-      let legacy = mvptracker_core::paths::legacy_staff_database_path(&app.path().app_data_dir()?);
+      let legacy = mvptime_core::paths::legacy_staff_database_path(&app.path().app_data_dir()?);
       if !shared.exists() && legacy.exists() {
         let _ = std::fs::copy(&legacy, &shared);
       }
@@ -126,8 +154,8 @@ pub fn run() {
 }
 
 #[tauri::command]
-fn health() -> mvptracker_core::Health {
-  mvptracker_core::Health { ok: true }
+fn health() -> mvptime_core::Health {
+  mvptime_core::Health { ok: true }
 }
 
 #[tauri::command]
@@ -168,160 +196,160 @@ async fn save_report_file(app: tauri::AppHandle, default_name: String, contents:
 
 #[tauri::command]
 fn db_init(db: tauri::State<'_, DbPath>) -> Result<(), String> {
-  let conn = mvptracker_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
+  let conn = mvptime_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
   Ok(())
 }
 
 #[tauri::command]
-fn db_list_projects(db: tauri::State<'_, DbPath>) -> Result<Vec<mvptracker_core::sqlite::ProjectRow>, String> {
-  let conn = mvptracker_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::list_projects(&conn).map_err(|e| e.to_string())
+fn db_list_projects(db: tauri::State<'_, DbPath>) -> Result<Vec<mvptime_core::sqlite::ProjectRow>, String> {
+  let conn = mvptime_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::list_projects(&conn).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn db_upsert_project(db: tauri::State<'_, DbPath>, project: mvptracker_core::sqlite::ProjectRow) -> Result<(), String> {
-  let conn = mvptracker_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::upsert_project(&conn, &project).map_err(|e| e.to_string())
+fn db_upsert_project(db: tauri::State<'_, DbPath>, project: mvptime_core::sqlite::ProjectRow) -> Result<(), String> {
+  let conn = mvptime_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::upsert_project(&conn, &project).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn db_delete_project(db: tauri::State<'_, DbPath>, id: String) -> Result<(), String> {
-  let conn = mvptracker_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::delete_project(&conn, &id).map_err(|e| e.to_string())
+  let conn = mvptime_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::delete_project(&conn, &id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn db_list_manual_entries(db: tauri::State<'_, DbPath>) -> Result<Vec<mvptracker_core::sqlite::ManualEntryRow>, String> {
-  let conn = mvptracker_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::list_manual_entries(&conn).map_err(|e| e.to_string())
+fn db_list_manual_entries(db: tauri::State<'_, DbPath>) -> Result<Vec<mvptime_core::sqlite::ManualEntryRow>, String> {
+  let conn = mvptime_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::list_manual_entries(&conn).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn db_add_manual_entry(db: tauri::State<'_, DbPath>, entry: mvptracker_core::sqlite::ManualEntryRow) -> Result<(), String> {
-  let conn = mvptracker_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::add_manual_entry(&conn, &entry).map_err(|e| e.to_string())
+fn db_add_manual_entry(db: tauri::State<'_, DbPath>, entry: mvptime_core::sqlite::ManualEntryRow) -> Result<(), String> {
+  let conn = mvptime_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::add_manual_entry(&conn, &entry).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn db_get_settings(db: tauri::State<'_, DbPath>) -> Result<Option<String>, String> {
-  let conn = mvptracker_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::get_settings_json(&conn).map_err(|e| e.to_string())
+  let conn = mvptime_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::get_settings_json(&conn).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn db_set_settings(db: tauri::State<'_, DbPath>, json: String) -> Result<(), String> {
-  let conn = mvptracker_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::set_settings_json(&conn, &json).map_err(|e| e.to_string())
+  let conn = mvptime_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::set_settings_json(&conn, &json).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn db_update_manual_entry(
   db: tauri::State<'_, DbPath>,
-  entry: mvptracker_core::sqlite::ManualEntryRow,
+  entry: mvptime_core::sqlite::ManualEntryRow,
 ) -> Result<(), String> {
-  let conn = mvptracker_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::update_manual_entry(&conn, &entry).map_err(|e| e.to_string())
+  let conn = mvptime_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::update_manual_entry(&conn, &entry).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn db_delete_manual_entry(db: tauri::State<'_, DbPath>, id: String) -> Result<(), String> {
-  let conn = mvptracker_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::delete_manual_entry(&conn, &id).map_err(|e| e.to_string())
+  let conn = mvptime_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::delete_manual_entry(&conn, &id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn db_list_activities(db: tauri::State<'_, DbPath>) -> Result<Vec<mvptracker_core::sqlite::ActivityRow>, String> {
-  let conn = mvptracker_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::list_activities(&conn).map_err(|e| e.to_string())
+fn db_list_activities(db: tauri::State<'_, DbPath>) -> Result<Vec<mvptime_core::sqlite::ActivityRow>, String> {
+  let conn = mvptime_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::list_activities(&conn).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn db_upsert_activity(
   db: tauri::State<'_, DbPath>,
-  activity: mvptracker_core::sqlite::ActivityRow,
+  activity: mvptime_core::sqlite::ActivityRow,
 ) -> Result<(), String> {
-  let conn = mvptracker_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::upsert_activity(&conn, &activity).map_err(|e| e.to_string())
+  let conn = mvptime_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::upsert_activity(&conn, &activity).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn db_delete_activity(db: tauri::State<'_, DbPath>, id: String) -> Result<(), String> {
-  let conn = mvptracker_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::delete_activity(&conn, &id).map_err(|e| e.to_string())
+  let conn = mvptime_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::delete_activity(&conn, &id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn db_list_corporations(
   db: tauri::State<'_, DbPath>,
-) -> Result<Vec<mvptracker_core::sqlite::CorporationRow>, String> {
-  let conn = mvptracker_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::list_corporations(&conn).map_err(|e| e.to_string())
+) -> Result<Vec<mvptime_core::sqlite::CorporationRow>, String> {
+  let conn = mvptime_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::list_corporations(&conn).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn db_upsert_corporation(
   db: tauri::State<'_, DbPath>,
-  corporation: mvptracker_core::sqlite::CorporationRow,
+  corporation: mvptime_core::sqlite::CorporationRow,
 ) -> Result<(), String> {
-  let conn = mvptracker_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::upsert_corporation(&conn, &corporation).map_err(|e| e.to_string())
+  let conn = mvptime_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::upsert_corporation(&conn, &corporation).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn db_delete_corporation(db: tauri::State<'_, DbPath>, id: String) -> Result<(), String> {
-  let conn = mvptracker_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::delete_corporation(&conn, &id).map_err(|e| e.to_string())
+  let conn = mvptime_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::delete_corporation(&conn, &id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn db_list_block_tags(
   db: tauri::State<'_, DbPath>,
-) -> Result<Vec<mvptracker_core::sqlite::BlockTagRow>, String> {
-  let conn = mvptracker_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::list_block_tags(&conn).map_err(|e| e.to_string())
+) -> Result<Vec<mvptime_core::sqlite::BlockTagRow>, String> {
+  let conn = mvptime_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::list_block_tags(&conn).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn db_set_block_tag(
   db: tauri::State<'_, DbPath>,
-  tag: mvptracker_core::sqlite::BlockTagRow,
+  tag: mvptime_core::sqlite::BlockTagRow,
 ) -> Result<(), String> {
-  let conn = mvptracker_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::set_block_tag(&conn, &tag).map_err(|e| e.to_string())
+  let conn = mvptime_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::set_block_tag(&conn, &tag).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn db_clear_block_tag(db: tauri::State<'_, DbPath>, id: String) -> Result<(), String> {
-  let conn = mvptracker_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::clear_block_tag(&conn, &id).map_err(|e| e.to_string())
+  let conn = mvptime_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::clear_block_tag(&conn, &id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn db_list_task_segments(
   db: tauri::State<'_, DbPath>,
-) -> Result<Vec<mvptracker_core::sqlite::TaskSegmentRow>, String> {
-  let conn = mvptracker_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::list_task_segments(&conn).map_err(|e| e.to_string())
+) -> Result<Vec<mvptime_core::sqlite::TaskSegmentRow>, String> {
+  let conn = mvptime_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::list_task_segments(&conn).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -330,21 +358,21 @@ fn db_ensure_open_task_segment(
   new_id: String,
   now_iso: String,
   max_gap_seconds: Option<u64>,
-) -> Result<mvptracker_core::sqlite::TaskSegmentRow, String> {
-  let conn = mvptracker_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
+) -> Result<mvptime_core::sqlite::TaskSegmentRow, String> {
+  let conn = mvptime_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
   let max_gap_seconds = max_gap_seconds.unwrap_or(5 * 60);
-  mvptracker_core::sqlite::ensure_open_task_segment(&conn, &new_id, &now_iso, max_gap_seconds)
+  mvptime_core::sqlite::ensure_open_task_segment(&conn, &new_id, &now_iso, max_gap_seconds)
     .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn db_task_checkin_yes(db: tauri::State<'_, DbPath>, now_iso: String) -> Result<(), String> {
-  let conn = mvptracker_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
-  let open = mvptracker_core::sqlite::get_open_task_segment(&conn).map_err(|e| e.to_string())?;
+  let conn = mvptime_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
+  let open = mvptime_core::sqlite::get_open_task_segment(&conn).map_err(|e| e.to_string())?;
   if let Some(s) = open {
-    mvptracker_core::sqlite::update_task_segment_prompt(&conn, &s.id, &now_iso).map_err(|e| e.to_string())?;
+    mvptime_core::sqlite::update_task_segment_prompt(&conn, &s.id, &now_iso).map_err(|e| e.to_string())?;
   }
   Ok(())
 }
@@ -370,13 +398,13 @@ fn db_task_checkin_no(
     })
   }
 
-  let conn = mvptracker_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
-  mvptracker_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
-  let open = mvptracker_core::sqlite::get_open_task_segment(&conn).map_err(|e| e.to_string())?;
+  let conn = mvptime_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
+  let open = mvptime_core::sqlite::get_open_task_segment(&conn).map_err(|e| e.to_string())?;
   if let Some(s) = open {
-    mvptracker_core::sqlite::close_task_segment(&conn, &s.id, &now_iso).map_err(|e| e.to_string())?;
+    mvptime_core::sqlite::close_task_segment(&conn, &s.id, &now_iso).map_err(|e| e.to_string())?;
   }
-  let row = mvptracker_core::sqlite::TaskSegmentRow {
+  let row = mvptime_core::sqlite::TaskSegmentRow {
     id: new_segment_id.clone(),
     start_time: now_iso.clone(),
     end_time: None,
@@ -384,7 +412,7 @@ fn db_task_checkin_no(
     created_at: now_iso.clone(),
     last_prompt_at: None,
   };
-  mvptracker_core::sqlite::upsert_task_segment(&conn, &row).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::upsert_task_segment(&conn, &row).map_err(|e| e.to_string())?;
 
   let corp = non_empty(tag_corporation_id);
   let tt = non_empty(tag_task_type);
@@ -394,7 +422,7 @@ fn db_task_checkin_no(
       .get(..10)
       .map(str::to_string)
       .unwrap_or_else(|| "1970-01-01".to_string());
-    let tag = mvptracker_core::sqlite::BlockTagRow {
+    let tag = mvptime_core::sqlite::BlockTagRow {
       id: format!("segmentTag:{}", new_segment_id),
       bucket_date,
       bucket_start: now_iso.clone(),
@@ -405,7 +433,7 @@ fn db_task_checkin_no(
       updated_at: now_iso.clone(),
       segment_id: Some(new_segment_id),
     };
-    mvptracker_core::sqlite::set_block_tag(&conn, &tag).map_err(|e| e.to_string())?;
+    mvptime_core::sqlite::set_block_tag(&conn, &tag).map_err(|e| e.to_string())?;
   }
 
   Ok(())

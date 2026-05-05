@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Navigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
+import StaffBackgroundServices from '../staff/StaffBackgroundServices';
 
 export default function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false);
@@ -31,5 +32,10 @@ export default function ProtectedRoute({ children }: { children: React.ReactNode
     return <Navigate to="/" replace />;
   }
 
-  return <>{children}</>;
+  return (
+    <>
+      <StaffBackgroundServices />
+      {children}
+    </>
+  );
 }
