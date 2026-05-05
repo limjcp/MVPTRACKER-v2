@@ -176,8 +176,8 @@ jobs:
           path: |
             src-tauri/app/target/universal-apple-darwin/release/bundle/**
 
-  publish-release:
-    needs: [windows-x64, macos-x64, macos-arm64]
+    publish-release:
+    needs: [windows-x64, macos-x64, macos-arm64, macos-universal-optional]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
@@ -204,8 +204,15 @@ jobs:
           name: mvptime-macos-arm64
           path: artifacts/macos-arm64
 
+      # Because macos-universal-optional might fail/skip, we use continue-on-error for the download
+      - uses: actions/download-artifact@v6
+        continue-on-error: true
+        with:
+          name: mvptime-macos-universal
+          path: artifacts/macos-universal
+
       - name: Merge updater latest.json
-        run: node scripts/merge-tauri-latest-json.cjs artifacts/windows artifacts/macos-x64 artifacts/macos-arm64
+        run: node scripts/merge-tauri-latest-json.cjs artifacts/windows artifacts/macos-x64 artifacts/macos-arm64 artifacts/macos-universal
         env:
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_REF_NAME: ${{ github.ref_name }}
@@ -217,10 +224,12 @@ jobs:
           name: ${{ github.ref_name }}
           draft: false
           generate_release_notes: true
+          # Only upload installers (.exe, .msi, .dmg, .tar.gz, .zip) and their signatures (.sig), and our latest.json!
           files: |
             latest.json
             artifacts/windows/**/*.exe
             artifacts/windows/**/*.msi
+            artifacts/windows/**/*.zip
             artifacts/windows/**/*.sig
             artifacts/macos-x64/**/*.dmg
             artifacts/macos-x64/**/*.tar.gz
@@ -228,5 +237,8 @@ jobs:
             artifacts/macos-arm64/**/*.dmg
             artifacts/macos-arm64/**/*.tar.gz
             artifacts/macos-arm64/**/*.sig
+            artifacts/macos-universal/**/*.dmg
+            artifacts/macos-universal/**/*.tar.gz
+            artifacts/macos-universal/**/*.sig
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -75,6 +75,16 @@ function main() {
     if (data) Object.assign(platforms, { 'darwin-aarch64': data });
   }
 
+    // For Mac Universal
+  const macUniversal = dirs.find(d => d.includes('macos-universal'));
+  if (macUniversal) {
+    const data = processPlatform(macUniversal);
+    if (data) {
+      // Overwrite the specific ones if a universal build exists, or register it as universal
+      Object.assign(platforms, { 'darwin-universal': data });
+    }
+  }
+
   const out = {
     version: process.env.GITHUB_REF_NAME ? process.env.GITHUB_REF_NAME.replace(/^v/, '') : '0.1.1',
     notes: 'A new version of MVPTime is available!',
