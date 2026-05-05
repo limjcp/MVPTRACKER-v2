@@ -41,7 +41,7 @@ import { cn, PROJECT_COLORS } from '../utils/cn';
 import { formatDuration } from '../utils/format';
 import { AppCategory, DailyStats } from '../types';
 import { CATEGORY_HEX } from '../utils/appCategories';
-import { unionAppSecondsForActivitiesOnDate } from '../utils/sidebarTotals';
+import { assignedSecondsForDate, unionAppSecondsForActivitiesOnDate } from '../utils/sidebarTotals';
 
 const CATEGORY_ICONS: Record<AppCategory, React.ElementType> = {
   browser: Globe,
@@ -62,7 +62,17 @@ const CATEGORY_ICONS: Record<AppCategory, React.ElementType> = {
 const CATEGORY_COLORS: Record<AppCategory, string> = CATEGORY_HEX;
 
 export default function Dashboard() {
-  const { dailyStats, projects, activities, calendarEvents, setView, recordCalendarEvent, settings, refreshDerivedTimeline } =
+  const {
+    dailyStats,
+    projects,
+    activities,
+    manualEntries,
+    calendarEvents,
+    setView,
+    recordCalendarEvent,
+    settings,
+    refreshDerivedTimeline,
+  } =
     useStore();
   const [now, setNow] = useState(new Date());
 
@@ -96,6 +106,10 @@ export default function Dashboard() {
     (a) => format(parseISO(a.startTime), 'yyyy-MM-dd') === format(now, 'yyyy-MM-dd')
   );
 
+  const billableSecondsToday = assignedSecondsForDate(activities, manualEntries, todayKey);
+  const defaultRate = settings.defaultHourlyRate ?? 150;
+  const billableEstimateToday = (billableSecondsToday / 3600) * defaultRate;
+
   // Weekly chart data
   const weeklyData = Array.from({ length: 7 }, (_, i) => {
     const date = subDays(now, 6 - i);
@@ -118,13 +132,7 @@ export default function Dashboard() {
   const unrecordedEvents = calendarEvents.filter((e) => !e.recorded);
 
   // Project totals today
-  const projectTotals: Record<string, number> = {};
-  todayActivities.forEach((a) => {
-    if (a.projectId) {
-      projectTotals[a.projectId] = (projectTotals[a.projectId] || 0) + a.duration;
-    }
-  });
-  const topProjects = Object.entries(projectTotals)
+  const topProjects = Object.entries(todayStats.projects ?? {})
     .sort((a, b) => b[1] - a[1])
     .slice(0, 4)
     .map(([id, dur]) => ({ project: projects.find((p) => p.id === id), duration: dur }))
@@ -189,15 +197,15 @@ export default function Dashboard() {
         />
         <StatCard
           label="Billable Hours"
-          value={formatDuration(todayActivities.filter((a) => a.projectId).reduce((s, a) => s + a.duration, 0))}
-          subValue={`$${(todayActivities.filter((a) => a.projectId).reduce((s, a) => s + a.duration, 0) / 3600 * 0).toFixed(0)} est.`}
+          value={formatDuration(billableSecondsToday)}
+          subValue={`$${billableEstimateToday.toFixed(0)} est.`}
           trend="up"
           icon={TrendingUp}
           color="amber"
         />
       </div>
 
-      {todayStats.overlapDiagnostics && (
+      {/* {todayStats.overlapDiagnostics && (
         <details className="group mb-6 rounded-2xl border border-amber-500/20 bg-amber-500/[0.04] px-4 py-3 text-left">
           <summary className="flex cursor-pointer list-none items-center gap-2 text-amber-200/90 text-xs font-medium select-none [&::-webkit-details-marker]:hidden">
             <Bug className="w-3.5 h-3.5 flex-shrink-0" />
@@ -274,7 +282,7 @@ export default function Dashboard() {
             )}
           </div>
         </details>
-      )}
+      )} */}
 
       <div className="grid grid-cols-12 gap-4 mb-4">
         {/* Weekly Overview Chart */}

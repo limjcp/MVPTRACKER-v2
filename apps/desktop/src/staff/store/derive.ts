@@ -495,6 +495,48 @@ function sweepDayUnionMetrics(rows: ClippedDayRow[]): {
   return { totalSec, productiveSec, unproductiveSec };
 }
 
+/**
+ * Union-time attribution by project for a day (no double counting across projects).
+ * For each union segment, we assign time to exactly one project if any overlapping row has a project.
+ */
+function sweepDayUnionProjectSeconds(rows: ClippedDayRow[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (rows.length === 0) return out;
+
+  const bounds = new Set<number>();
+  for (const r of rows) {
+    bounds.add(r.startMs);
+    bounds.add(r.endMs);
+  }
+  const sorted = [...bounds].sort((a, b) => a - b);
+
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const lo = sorted[i]!;
+    const hi = sorted[i + 1]!;
+    if (hi <= lo) continue;
+
+    const coveringProjects = rows.filter(
+      (r) => r.projectId && r.startMs < hi && r.endMs > lo
+    );
+    if (coveringProjects.length === 0) continue;
+
+    // Pick a single winner so totals sum to union time.
+    const winner = [...coveringProjects].sort((a, b) => {
+      if (a.startMs !== b.startMs) return b.startMs - a.startMs; // latest start wins
+      if (a.endMs !== b.endMs) return b.endMs - a.endMs; // then longer
+      return a.id.localeCompare(b.id); // stable tie-break
+    })[0]!;
+
+    const sec = Math.max(0, Math.round((hi - lo) / 1000));
+    if (sec <= 0) continue;
+
+    const pid = winner.projectId!;
+    out[pid] = (out[pid] ?? 0) + sec;
+  }
+
+  return out;
+}
+
 const MAX_OVERLAP_PAIRS = 28;
 
 function buildOverlapDiagnostics(
@@ -557,12 +599,7 @@ export function computeDailyStats(
     const productiveTime = productiveSec;
     const unproductiveTime = unproductiveSec;
 
-    const projectSeconds: Record<string, number> = {};
-    for (const r of clippedRows) {
-      if (!r.projectId) continue;
-      const len = Math.max(0, Math.round((r.endMs - r.startMs) / 1000));
-      projectSeconds[r.projectId] = (projectSeconds[r.projectId] ?? 0) + len;
-    }
+    const projectSeconds = sweepDayUnionProjectSeconds(clippedRows);
 
     const denom = productiveTime + unproductiveTime;
     const productivityScore =

@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase';
 import { computeDailyStats } from './store/derive';
 import { useStore } from './store/useStore';
 import type { ActivityEntry, ManualEntry, Project, TaskSegment } from './types';
+import { unionAppSecondsForActivitiesOnDate } from './utils/sidebarTotals';
 import { formatTaskType } from './utils/taskTypes';
 
 function chunk<T>(rows: T[], size: number): T[][] {
@@ -140,22 +141,20 @@ function buildUserTaskBlockDaily(
 }
 
 function buildUserAppDaily(activities: ActivityEntry[], daysBack: number, anchorIso: string) {
-  const anchor = new Date(anchorIso);
   const out: Array<{ day: string; app_name: string; seconds: number }> = [];
-  const byKey = new Map<string, number>();
-  for (const a of activities) {
-    const d = dayStrFromIso(a.startTime);
-    if (!d) continue;
-    // basic range guard (we don't clip precisely here; server stores raw slices anyway)
-    const deltaDays = Math.floor((anchor.getTime() - new Date(`${d}T00:00:00.000Z`).getTime()) / (24 * 3600 * 1000));
-    if (deltaDays < 0 || deltaDays >= daysBack) continue;
-    const key = `${d}||${a.appName}`;
-    byKey.set(key, (byKey.get(key) ?? 0) + clampInt(a.duration));
-  }
-  for (const [key, seconds] of byKey) {
-    const [day, app_name] = key.split('||');
-    if (!day || !app_name) continue;
-    out.push({ day, app_name, seconds });
+  const anchor = new Date(anchorIso);
+  const anchorDay = localDayKey(anchor);
+
+  // Compute union-attributed app seconds per day so totals sum to the day's union time
+  // (no double-counting overlaps or duplicates).
+  for (let i = 0; i < daysBack; i++) {
+    const day = localDayKey(addDaysLocal(startOfDayLocal(anchorDay), -i));
+    const totals = unionAppSecondsForActivitiesOnDate(activities, day);
+    for (const [app_name, { duration }] of Object.entries(totals)) {
+      const seconds = clampInt(duration);
+      if (seconds <= 0) continue;
+      out.push({ day, app_name, seconds });
+    }
   }
   return out;
 }
@@ -165,48 +164,27 @@ function buildUserProjectDaily(
   manualEntries: ManualEntry[],
   projects: Project[],
   daysBack: number,
-  anchorIso: string
+  anchorIso: string,
+  daily: Array<{ date: string; projects: Record<string, number> }>
 ) {
-  const anchor = new Date(anchorIso);
   const nameById = new Map(projects.map((p) => [p.id, p.name] as const));
-  const byKey = new Map<string, number>();
-
-  const add = (day: string, projectName: string, seconds: number) => {
-    if (!day || !projectName) return;
-    const key = `${day}||${projectName}`;
-    byKey.set(key, (byKey.get(key) ?? 0) + clampInt(seconds));
-  };
-
-  const dayInRange = (day: string) => {
-    const deltaDays = Math.floor(
-      (anchor.getTime() - new Date(`${day}T00:00:00.000Z`).getTime()) / (24 * 3600 * 1000)
-    );
-    return deltaDays >= 0 && deltaDays < daysBack;
-  };
-
-  for (const a of activities) {
-    if (!a.projectId) continue;
-    const day = dayStrFromIso(a.startTime);
-    if (!day || !dayInRange(day)) continue;
-    const name = nameById.get(a.projectId);
-    if (!name) continue;
-    add(day, name, a.duration);
-  }
-
-  for (const m of manualEntries) {
-    if (!m.projectId) continue;
-    const day = dayStrFromIso(m.startTime);
-    if (!day || !dayInRange(day)) continue;
-    const name = nameById.get(m.projectId);
-    if (!name) continue;
-    add(day, name, m.duration);
-  }
-
   const out: Array<{ day: string; project_name: string; seconds: number }> = [];
-  for (const [key, seconds] of byKey) {
-    const [day, project_name] = key.split('||');
-    if (!day || !project_name) continue;
-    out.push({ day, project_name, seconds });
+  const anchor = new Date(anchorIso);
+  const anchorDay = localDayKey(anchor);
+
+  // Use the already-unioned per-day project totals from computeDailyStats so this matches `total_seconds`.
+  // (Avoids double-counting overlaps/duplicates across activities/manual entries.)
+  const byDate = new Map(daily.map((d) => [d.date, d.projects] as const));
+  for (let i = 0; i < daysBack; i++) {
+    const day = localDayKey(addDaysLocal(startOfDayLocal(anchorDay), -i));
+    const projSeconds = byDate.get(day) ?? {};
+    for (const [projectId, secondsRaw] of Object.entries(projSeconds)) {
+      const project_name = nameById.get(projectId);
+      if (!project_name) continue;
+      const seconds = clampInt(secondsRaw);
+      if (seconds <= 0) continue;
+      out.push({ day, project_name, seconds });
+    }
   }
   return out;
 }
@@ -342,7 +320,7 @@ export function useSupabaseSync(enabled: boolean) {
           'user_id,day,app_name'
         );
 
-        const projectDaily = buildUserProjectDaily(activities, manualEntries, projects, 30, anchorIso);
+        const projectDaily = buildUserProjectDaily(activities, manualEntries, projects, 30, anchorIso, daily);
         await upsertAll(
           'user_project_daily',
           projectDaily.map((r) => ({

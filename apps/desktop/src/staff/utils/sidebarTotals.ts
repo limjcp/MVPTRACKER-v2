@@ -176,3 +176,25 @@ export function secondsForProjectOnDate(
   }
   return unionSeconds(intervals);
 }
+
+/** Union seconds on date with a project assignment (billable/assigned time). */
+export function assignedSecondsForDate(
+  activities: ActivityEntry[],
+  manualEntries: ManualEntry[],
+  dateStr: string
+): number {
+  const intervals: Interval[] = [];
+  for (const a of activities) {
+    if (!a.projectId) continue;
+    if (!onDate(a.startTime, dateStr)) continue;
+    const clip = clipToLocalDay(a.startTime, a.endTime, dateStr);
+    if (clip) intervals.push(clip);
+  }
+  for (const m of manualEntries) {
+    if (!m.projectId) continue;
+    if (!onDate(m.startTime, dateStr)) continue;
+    const clip = clipToLocalDay(m.startTime, m.endTime, dateStr);
+    if (clip) intervals.push(clip);
+  }
+  return unionSeconds(intervals);
+}

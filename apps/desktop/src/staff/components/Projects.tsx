@@ -17,24 +17,30 @@ import { useStore } from '../store/useStore';
 import { cn, PROJECT_COLORS } from '../utils/cn';
 import { formatDuration } from '../utils/format';
 import { Project, ProjectColor, ProjectScope } from '../types';
-import { format } from 'date-fns';
+import { format, subDays } from 'date-fns';
+import { secondsForProjectOnDate } from '../utils/sidebarTotals';
 
 const COLOR_OPTIONS: ProjectColor[] = ['blue', 'purple', 'green', 'orange', 'red', 'pink', 'teal', 'yellow', 'indigo', 'cyan'];
 const ICONS = ['🎨', '📱', '📊', '🔌', '🌐', '✅', '🚀', '💡', '🔥', '⚡', '🎯', '🛠️', '📝', '🔍', '💼'];
 
 export default function Projects() {
-  const { projects, activities, addProject, updateProject, deleteProject } = useStore();
+  const { projects, activities, manualEntries, addProject, updateProject, deleteProject } = useStore();
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
 
   const getProjectStats = (projectId: string) => {
-    const projectActivities = activities.filter((a) => a.projectId === projectId);
     const today = format(new Date(), 'yyyy-MM-dd');
-    const todayTime = projectActivities
-      .filter((a) => a.startTime.startsWith(today))
-      .reduce((s, a) => s + a.duration, 0);
-    const weekTime = projectActivities.reduce((s, a) => s + a.duration, 0);
+    const todayTime = secondsForProjectOnDate(activities, manualEntries, projectId, today);
+
+    // Week = sum of daily unioned totals for the last 7 days (including today).
+    let weekTime = 0;
+    const anchor = new Date();
+    for (let i = 0; i < 7; i++) {
+      const d = subDays(anchor, i);
+      const dayStr = format(d, 'yyyy-MM-dd');
+      weekTime += secondsForProjectOnDate(activities, manualEntries, projectId, dayStr);
+    }
     return { todayTime, weekTime };
   };
 

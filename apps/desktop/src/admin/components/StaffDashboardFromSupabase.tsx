@@ -23,6 +23,7 @@ type DailyRow = {
 };
 type AppDailyRow = { user_id: string; day: string; app_name: string; seconds: number };
 type ProjectDailyRow = { user_id: string; day: string; project_name: string; seconds: number };
+type TaskBlockDailyRow = { user_id: string; day: string; label: string; seconds: number };
 type CurrentStatusRow = {
   user_id: string;
   tracking_status: 'active' | 'idle' | 'away';
@@ -88,6 +89,7 @@ export default function StaffDashboardFromSupabase({
   const [daily, setDaily] = useState<DailyRow[]>([]);
   const [apps, setApps] = useState<AppDailyRow[]>([]);
   const [projects, setProjects] = useState<ProjectDailyRow[]>([]);
+  const [taskBlocks, setTaskBlocks] = useState<TaskBlockDailyRow[]>([]);
   const [status, setStatus] = useState<CurrentStatusRow | null>(null);
 
   const now = new Date();
@@ -107,7 +109,7 @@ export default function StaffDashboardFromSupabase({
     void (async () => {
       try {
         const startDay = dayKey(subDays(now, 29));
-        const [dRes, aRes, pRes, sRes] = await Promise.all([
+        const [dRes, aRes, pRes, tbRes, sRes] = await Promise.all([
           client
             .from('user_daily_stats')
             .select('user_id, day, total_seconds, productive_seconds, unproductive_seconds, idle_seconds, productivity_score')
@@ -127,6 +129,12 @@ export default function StaffDashboardFromSupabase({
             .gte('day', startDay)
             .lte('day', today),
           client
+            .from('user_task_block_daily')
+            .select('user_id, day, label, seconds')
+            .eq('user_id', userId)
+            .gte('day', startDay)
+            .lte('day', today),
+          client
             .from('user_current_status')
             .select('user_id, tracking_status, current_app, current_project, current_task_label, last_sync_at')
             .eq('user_id', userId)
@@ -135,11 +143,13 @@ export default function StaffDashboardFromSupabase({
         if (dRes.error) throw dRes.error;
         if (aRes.error) throw aRes.error;
         if (pRes.error) throw pRes.error;
+        if (tbRes.error) throw tbRes.error;
         if (sRes.error) throw sRes.error;
         if (cancelled) return;
         setDaily((dRes.data ?? []) as any);
         setApps((aRes.data ?? []) as any);
         setProjects((pRes.data ?? []) as any);
+        setTaskBlocks((tbRes.data ?? []) as any);
         setStatus((sRes.data ?? null) as any);
       } catch (e: any) {
         if (!cancelled) setError(String(e?.message || e));
@@ -192,6 +202,16 @@ export default function StaffDashboardFromSupabase({
     }
     return [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4);
   }, [projects, today]);
+
+  const topBlocks = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of taskBlocks) {
+      if (r.day !== today) continue;
+      const k = r.label || 'Untagged task block';
+      m.set(k, (m.get(k) ?? 0) + Number(r.seconds ?? 0));
+    }
+    return [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+  }, [taskBlocks, today]);
 
   if (loading) {
     return (
@@ -312,35 +332,59 @@ export default function StaffDashboardFromSupabase({
             </ResponsiveContainer>
           </div>
 
-          <div className="col-span-4 bg-[#0D0F14] rounded-2xl p-5 border border-white/[0.05]">
-            <h3 className="text-white font-semibold text-[15px] mb-1">Top Apps Today</h3>
-            <p className="text-white/40 text-xs mb-4">From `user_app_daily`</p>
-            <div className="space-y-3">
-              {topApps.length === 0 ? (
-                <p className="text-white/25 text-xs">No app data today.</p>
-              ) : (
-                topApps.map(([app, sec]) => {
-                  const Icon = CATEGORY_ICONS.other || Activity;
-                  const pct = (todayRow?.total_seconds ?? 0) > 0 ? (sec / (todayRow?.total_seconds ?? 1)) * 100 : 0;
-                  return (
-                    <div key={app} className="space-y-1.5">
-                      <div className="flex items-center gap-2">
-                        <div className="w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0 bg-white/[0.06]">
-                          <Icon className="w-3.5 h-3.5 text-white/55" />
+          <div className="col-span-4 space-y-4">
+            <div className="bg-[#0D0F14] rounded-2xl p-5 border border-white/[0.05]">
+              <h3 className="text-white font-semibold text-[15px] mb-1">Top Apps Today</h3>
+              <p className="text-white/40 text-xs mb-4">From `user_app_daily`</p>
+              <div className="space-y-3">
+                {topApps.length === 0 ? (
+                  <p className="text-white/25 text-xs">No app data today.</p>
+                ) : (
+                  topApps.map(([app, sec]) => {
+                    const Icon = CATEGORY_ICONS.other || Activity;
+                    const pct =
+                      (todayRow?.total_seconds ?? 0) > 0
+                        ? (sec / (todayRow?.total_seconds ?? 1)) * 100
+                        : 0;
+                    return (
+                      <div key={app} className="space-y-1.5">
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0 bg-white/[0.06]">
+                            <Icon className="w-3.5 h-3.5 text-white/55" />
+                          </div>
+                          <span className="text-white/70 text-xs flex-1 truncate">{app}</span>
+                          <span className="text-white/40 text-xs">{formatDuration(sec)}</span>
                         </div>
-                        <span className="text-white/70 text-xs flex-1 truncate">{app}</span>
-                        <span className="text-white/40 text-xs">{formatDuration(sec)}</span>
+                        <div className="h-1 bg-white/[0.06] rounded-full overflow-hidden ml-8">
+                          <div
+                            className="h-full rounded-full transition-all duration-700 bg-violet-500/70"
+                            style={{ width: `${Math.min(100, Math.max(0, pct))}%` }}
+                          />
+                        </div>
                       </div>
-                      <div className="h-1 bg-white/[0.06] rounded-full overflow-hidden ml-8">
-                        <div
-                          className="h-full rounded-full transition-all duration-700 bg-violet-500/70"
-                          style={{ width: `${Math.min(100, Math.max(0, pct))}%` }}
-                        />
-                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+
+            <div className="bg-[#0D0F14] rounded-2xl p-5 border border-white/[0.05]">
+              <h3 className="text-white font-semibold text-[15px] mb-1">Top Blocks Today</h3>
+              <p className="text-white/40 text-xs mb-4">From `user_task_block_daily`</p>
+              <div className="space-y-2">
+                {topBlocks.length === 0 ? (
+                  <p className="text-white/25 text-xs">No block data today.</p>
+                ) : (
+                  topBlocks.map(([label, sec]) => (
+                    <div key={label} className="flex items-center justify-between gap-3">
+                      <span className="text-white/70 text-xs flex-1 truncate">{label}</span>
+                      <span className="text-white/40 text-xs font-mono tabular-nums">
+                        {formatDuration(sec)}
+                      </span>
                     </div>
-                  );
-                })
-              )}
+                  ))
+                )}
+              </div>
             </div>
           </div>
         </div>
