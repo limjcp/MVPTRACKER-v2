@@ -204,12 +204,22 @@ jobs:
           name: mvptime-macos-arm64
           path: artifacts/macos-arm64
 
-      # Because macos-universal-optional might fail/skip, we use continue-on-error for the download
       - uses: actions/download-artifact@v6
         continue-on-error: true
         with:
           name: mvptime-macos-universal
           path: artifacts/macos-universal
+
+      - name: Prevent Mac Archive Collisions
+        run: |
+          find artifacts/macos-x64 -name "MVPTime.app.tar.gz" -exec mv {} {}_x64.tar.gz \;
+          find artifacts/macos-x64 -name "MVPTime.app.tar.gz.sig" -exec mv {} {}_x64.tar.gz.sig \;
+
+          find artifacts/macos-arm64 -name "MVPTime.app.tar.gz" -exec mv {} {}_aarch64.tar.gz \;
+          find artifacts/macos-arm64 -name "MVPTime.app.tar.gz.sig" -exec mv {} {}_aarch64.tar.gz.sig \;
+
+          find artifacts/macos-universal -name "MVPTime.app.tar.gz" -exec mv {} {}_universal.tar.gz \;
+          find artifacts/macos-universal -name "MVPTime.app.tar.gz.sig" -exec mv {} {}_universal.tar.gz.sig \;
 
       - name: Merge updater latest.json
         run: node scripts/merge-tauri-latest-json.cjs artifacts/windows artifacts/macos-x64 artifacts/macos-arm64 artifacts/macos-universal
@@ -224,7 +234,6 @@ jobs:
           name: ${{ github.ref_name }}
           draft: false
           generate_release_notes: true
-          # Only upload installers (.exe, .msi, .dmg, .tar.gz, .zip) and their signatures (.sig), and our latest.json!
           files: |
             latest.json
             artifacts/windows/**/*.exe

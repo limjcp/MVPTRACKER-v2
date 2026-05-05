@@ -3,7 +3,6 @@
  */
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
 
 function walkFiles(dir, acc = []) {
   if (!fs.existsSync(dir)) return acc;
@@ -22,7 +21,7 @@ function processPlatform(dir) {
 
   if (sigFiles.length === 0) return null;
 
-  // Prefer .zip, .tar.gz, .msi, or .exe in that order
+  // Derive the target installer by stripping `.sig`
   const getInstallerOptions = (sigPath) => sigPath.replace(/\.sig$/, '');
 
   let validInstaller = null;
@@ -33,7 +32,7 @@ function processPlatform(dir) {
     if (fs.existsSync(installer)) {
       validInstaller = installer;
       validSig = sig;
-      break; // Pick the first valid signed matched file
+      break;
     }
   }
 
@@ -42,9 +41,8 @@ function processPlatform(dir) {
   const signature = fs.readFileSync(validSig, 'utf8').trim();
   const filename = path.basename(validInstaller);
 
-  // Calculate URL to where this release will eventually live
   const repo = process.env.GITHUB_REPOSITORY;
-  const version = 'v0.1.1'; // Ideally passed in via process.env.GITHUB_REF_NAME
+  const version = process.env.GITHUB_REF_NAME ? process.env.GITHUB_REF_NAME : 'v0.1.1';
   const url = `https://github.com/${repo}/releases/download/${version}/${filename}`;
 
   return { signature, url };
@@ -75,12 +73,11 @@ function main() {
     if (data) Object.assign(platforms, { 'darwin-aarch64': data });
   }
 
-    // For Mac Universal
+  // For Mac Universal
   const macUniversal = dirs.find(d => d.includes('macos-universal'));
   if (macUniversal) {
     const data = processPlatform(macUniversal);
     if (data) {
-      // Overwrite the specific ones if a universal build exists, or register it as universal
       Object.assign(platforms, { 'darwin-universal': data });
     }
   }
