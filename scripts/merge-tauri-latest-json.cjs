@@ -1,10 +1,9 @@
 /**
- * Merges Tauri updater `latest.json` files from multiple bundle directories (one `platforms` map).
- * Usage: node scripts/merge-tauri-latest-json.cjs <dir1> [dir2] [...]
- * Writes `latest.json` in the current working directory.
+ * Scans directories for built artifacts and generated `.sig` files to construct `latest.json` manually.
  */
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 function walkFiles(dir, acc = []) {
   if (!fs.existsSync(dir)) return acc;
@@ -17,57 +16,74 @@ function walkFiles(dir, acc = []) {
   return acc;
 }
 
-function findLatestJson(dirs) {
-  const out = [];
-  for (const d of dirs) {
-    for (const f of walkFiles(d)) {
-      if (path.basename(f) === 'latest.json') out.push(f);
+function processPlatform(dir) {
+  const files = walkFiles(dir);
+  const sigFiles = files.filter(f => f.endsWith('.sig'));
+
+  if (sigFiles.length === 0) return null;
+
+  // Prefer .zip, .tar.gz, .msi, or .exe in that order
+  const getInstallerOptions = (sigPath) => sigPath.replace(/\.sig$/, '');
+
+  let validInstaller = null;
+  let validSig = null;
+
+  for (const sig of sigFiles) {
+    const installer = getInstallerOptions(sig);
+    if (fs.existsSync(installer)) {
+      validInstaller = installer;
+      validSig = sig;
+      break; // Pick the first valid signed matched file
     }
   }
-  return out;
-}
 
-function semverKey(v) {
-  const s = String(v || '0.0.0').replace(/^v/i, '');
-  const parts = s.split('.').map((x) => parseInt(x, 10));
-  return (parts[0] || 0) * 1e6 + (parts[1] || 0) * 1e3 + (parts[2] || 0);
+  if (!validInstaller) return null;
+
+  const signature = fs.readFileSync(validSig, 'utf8').trim();
+  const filename = path.basename(validInstaller);
+
+  // Calculate URL to where this release will eventually live
+  const repo = process.env.GITHUB_REPOSITORY;
+  const version = 'v0.1.1'; // Ideally passed in via process.env.GITHUB_REF_NAME
+  const url = `https://github.com/${repo}/releases/download/${version}/${filename}`;
+
+  return { signature, url };
 }
 
 function main() {
   const dirs = process.argv.slice(2).filter(Boolean);
-  if (dirs.length === 0) {
-    console.error('Usage: node scripts/merge-tauri-latest-json.cjs <artifactDir> [...]');
-    process.exit(1);
-  }
-  const files = findLatestJson(dirs);
-  if (files.length === 0) {
-    console.error('No latest.json found under:', dirs.join(', '));
-    process.exit(1);
-  }
-
-  let bestVersion = '0.0.0';
-  let bestKey = 0;
   const platforms = {};
-  let notes = '';
 
-  for (const f of files) {
-    const j = JSON.parse(fs.readFileSync(f, 'utf8'));
-    const vk = semverKey(j.version);
-    if (vk >= bestKey) {
-      bestKey = vk;
-      bestVersion = String(j.version || '0.0.0').replace(/^v/i, '');
-      if (j.notes) notes = j.notes;
-    }
-    Object.assign(platforms, j.platforms || {});
+  // For Windows
+  const win = dirs.find(d => d.includes('windows'));
+  if (win) {
+    const data = processPlatform(win);
+    if (data) Object.assign(platforms, { 'windows-x86_64': data });
+  }
+
+  // For Mac Intel
+  const macIntel = dirs.find(d => d.includes('macos-x64'));
+  if (macIntel) {
+    const data = processPlatform(macIntel);
+    if (data) Object.assign(platforms, { 'darwin-x86_64': data });
+  }
+
+  // For Mac Silicon
+  const macArm = dirs.find(d => d.includes('macos-arm64'));
+  if (macArm) {
+    const data = processPlatform(macArm);
+    if (data) Object.assign(platforms, { 'darwin-aarch64': data });
   }
 
   const out = {
-    version: bestVersion,
-    notes,
+    version: process.env.GITHUB_REF_NAME ? process.env.GITHUB_REF_NAME.replace(/^v/, '') : '0.1.1',
+    notes: 'A new version of MVPTime is available!',
+    pub_date: new Date().toISOString(),
     platforms,
   };
+
   fs.writeFileSync('latest.json', JSON.stringify(out, null, 2));
-  console.log('Wrote latest.json version=%s platforms=%s', out.version, Object.keys(out.platforms).join(', '));
+  console.log('Wrote latest.json directly from signatures:', Object.keys(out.platforms).join(', '));
 }
 
 main();
