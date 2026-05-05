@@ -219,8 +219,14 @@ jobs:
           generate_release_notes: true
           files: |
             latest.json
-            artifacts/windows/**/*
-            artifacts/macos-x64/**/*
-            artifacts/macos-arm64/**/*
+            artifacts/windows/**/*.exe
+            artifacts/windows/**/*.msi
+            artifacts/windows/**/*.sig
+            artifacts/macos-x64/**/*.dmg
+            artifacts/macos-x64/**/*.tar.gz
+            artifacts/macos-x64/**/*.sig
+            artifacts/macos-arm64/**/*.dmg
+            artifacts/macos-arm64/**/*.tar.gz
+            artifacts/macos-arm64/**/*.sig
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
