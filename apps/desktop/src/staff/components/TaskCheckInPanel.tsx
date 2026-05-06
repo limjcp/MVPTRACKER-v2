@@ -123,6 +123,7 @@ export default function TaskCheckInPanel() {
   const [step, setStep] = useState<Step>(() => (defaultNo ? 'newTask' : 'ask'));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const didInitDbRef = useRef(false);
 
   const [segments, setSegments] = useState<TaskSegmentRow[]>([]);
   const [tags, setTags] = useState<BlockTagRow[]>([]);
@@ -137,6 +138,10 @@ export default function TaskCheckInPanel() {
 
   const refreshContext = useCallback(async () => {
     if (!isTauri()) return;
+    if (!didInitDbRef.current) {
+      await invoke('db_init');
+      didInitDbRef.current = true;
+    }
     const [segRows, tagRows, corpRows] = await Promise.all([
       invoke<Record<string, unknown>[]>('db_list_task_segments'),
       invoke<Record<string, unknown>[]>('db_list_block_tags'),

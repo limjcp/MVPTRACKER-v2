@@ -20,8 +20,9 @@ export default function StaffBackgroundServices() {
   const enabled = !isCheckIn;
 
   useEffect(() => {
+    if (isCheckIn) return;
     void hydrate();
-  }, [hydrate]);
+  }, [hydrate, isCheckIn]);
 
   useTaskCheckInScheduler(enabled);
   useAutomaticTracking(enabled);
