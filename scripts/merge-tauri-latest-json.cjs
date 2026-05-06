@@ -17,32 +17,28 @@ function walkFiles(dir, acc = []) {
 
 function processPlatform(dir) {
   const files = walkFiles(dir);
-  const sigFiles = files.filter(f => f.endsWith('.sig'));
 
-  if (sigFiles.length === 0) return null;
-
-  // Derive the target installer by stripping `.sig`
-  const getInstallerOptions = (sigPath) => sigPath.replace(/\.sig$/, '');
-
-  let validInstaller = null;
+  // Focus ONLY on the `.tar.gz.sig` (for mac) or `.msi.sig` / `.exe.sig` (for windows).
+  // We prioritize `.tar.gz.sig` for mac because the updater mandates tar.gz.
   let validSig = null;
-
-  for (const sig of sigFiles) {
-    const installer = getInstallerOptions(sig);
-    if (fs.existsSync(installer)) {
-      validInstaller = installer;
-      validSig = sig;
-      break;
-    }
+  if (dir.includes('macos')) {
+    validSig = files.find(f => f.endsWith('.tar.gz.sig'));
+  } else if (dir.includes('windows')) {
+    validSig = files.find(f => f.endsWith('.msi.sig') || f.endsWith('.exe.sig'));
   }
 
-  if (!validInstaller) return null;
+  if (!validSig) return null;
+
+  // The installer is the signature path minus the `.sig` extension
+  const validInstaller = validSig.replace(/\.sig$/, '');
+
+  if (!fs.existsSync(validInstaller)) return null;
 
   const signature = fs.readFileSync(validSig, 'utf8').trim();
   const filename = path.basename(validInstaller);
 
   const repo = process.env.GITHUB_REPOSITORY;
-  const version = process.env.GITHUB_REF_NAME ? process.env.GITHUB_REF_NAME : 'v0.1.1';
+  const version = process.env.GITHUB_REF_NAME ? process.env.GITHUB_REF_NAME : 'v0.1.2';
   const url = `https://github.com/${repo}/releases/download/${version}/${filename}`;
 
   return { signature, url };

@@ -48,6 +48,7 @@ jobs:
           name: mvptime-windows
           path: |
             src-tauri/app/target/**/release/bundle/**
+            src-tauri/app/target/**/release/mvptime.exe
 
   macos-x64:
     runs-on: macos-latest
@@ -210,7 +211,7 @@ jobs:
           name: mvptime-macos-universal
           path: artifacts/macos-universal
 
-      - name: Prevent Mac Archive Collisions
+      - name: Prevent Mac Archive Collisions and Expose Portable Windows
         run: |
           find artifacts/macos-x64 -name "MVPTime.app.tar.gz" -exec mv {} {}_x64.tar.gz \;
           find artifacts/macos-x64 -name "MVPTime.app.tar.gz.sig" -exec mv {} {}_x64.tar.gz.sig \;
@@ -220,6 +221,9 @@ jobs:
 
           find artifacts/macos-universal -name "MVPTime.app.tar.gz" -exec mv {} {}_universal.tar.gz \;
           find artifacts/macos-universal -name "MVPTime.app.tar.gz.sig" -exec mv {} {}_universal.tar.gz.sig \;
+
+          # Expose Windows portable
+          find artifacts/windows -name "mvptime.exe" -exec mv {} {}_0.1.2_portable.exe \;
 
       - name: Merge updater latest.json
         run: node scripts/merge-tauri-latest-json.cjs artifacts/windows artifacts/macos-x64 artifacts/macos-arm64 artifacts/macos-universal
