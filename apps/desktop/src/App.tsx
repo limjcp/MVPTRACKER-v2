@@ -1,3 +1,4 @@
+import { Toaster } from 'sonner';
 import { Routes, Route } from 'react-router-dom';
 import LoginPage from './routes/LoginPage';
 import ProtectedRoute from './routes/ProtectedRoute';
@@ -8,6 +9,7 @@ import StaffRoot from './staff/App';
 export default function App() {
   return (
     <div className="flex min-h-dvh w-full flex-1 flex-col">
+      <Toaster position="bottom-left" theme="dark" closeButton />
       <Routes>
         <Route path="/" element={<LoginPage />} />
         <Route

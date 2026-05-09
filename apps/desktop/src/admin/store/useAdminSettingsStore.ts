@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { invoke, isTauri } from '@tauri-apps/api/core';
+import { invalidateTrackingPrefsCache } from '../../staff/trackingPrefsCache';
 import type { AppSettings } from '../types/settings';
 
 function isTauriRuntime() {
@@ -53,6 +54,7 @@ export const useAdminSettingsStore = create<State>((set, get) => ({
     const next = { ...get().settings, ...updates };
     set({ settings: next });
     if (isTauriRuntime()) void invoke('db_set_settings', { json: JSON.stringify(next) });
+    invalidateTrackingPrefsCache();
   },
 
   triggerSync: () => {

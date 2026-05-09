@@ -82,6 +82,28 @@ function findTagForSegment(tags: BlockTagRow[], segmentId: string): BlockTagRow 
   return tags.find((t) => t.segmentId === segmentId || t.id === blockSegmentTagId(segmentId));
 }
 
+/** Most recently ended segment that has corp/task tags (for defaults after downtime split). */
+function findLastClosedSegmentTag(
+  segments: TaskSegmentRow[],
+  tags: BlockTagRow[]
+): BlockTagRow | undefined {
+  const closed = segments
+    .filter((s) => s.endTime)
+    .sort((a, b) => parseISO(b.endTime!).getTime() - parseISO(a.endTime!).getTime());
+  for (const s of closed) {
+    const tag = findTagForSegment(tags, s.id);
+    if (
+      tag &&
+      (tag.corporationId ||
+        (tag.taskType != null && String(tag.taskType).trim() !== '') ||
+        (tag.taskTypeDetail != null && String(tag.taskTypeDetail).trim() !== ''))
+    ) {
+      return tag;
+    }
+  }
+  return undefined;
+}
+
 function buildStillOnLines(
   open: TaskSegmentRow | undefined,
   tag: BlockTagRow | undefined,
@@ -180,6 +202,10 @@ export default function TaskCheckInPanel() {
     () => (openSegment ? findTagForSegment(tags, openSegment.id) : undefined),
     [tags, openSegment]
   );
+  const defaultTagForForm = useMemo(
+    () => openTag ?? findLastClosedSegmentTag(segments, tags),
+    [openTag, segments, tags]
+  );
 
   const didInitDefaultNo = useRef(false);
   const { headline, detail } = useMemo(
@@ -239,15 +265,16 @@ export default function TaskCheckInPanel() {
 
   const goToNewTask = () => {
     setError(null);
-    setCorpId(openTag?.corporationId ?? '');
-    const prevSlug = openTag?.taskType ?? '';
+    const tag = defaultTagForForm;
+    setCorpId(tag?.corporationId ?? '');
+    const prevSlug = tag?.taskType ?? '';
     setTaskSlug(prevSlug);
     if (prevSlug === OTHER_TASK_SLUG) {
-      setOtherDraft(openTag?.taskTypeDetail ?? '');
+      setOtherDraft(tag?.taskTypeDetail ?? '');
       setDetailDraft('');
     } else {
       const opt = getTaskTypeOption(prevSlug);
-      setDetailDraft(opt?.requiresDetail ? (openTag?.taskTypeDetail ?? '') : '');
+      setDetailDraft(opt?.requiresDetail ? (tag?.taskTypeDetail ?? '') : '');
       setOtherDraft('');
     }
     setShowAddCorp(false);
@@ -258,11 +285,12 @@ export default function TaskCheckInPanel() {
   useEffect(() => {
     if (!defaultNo) return;
     if (step !== 'newTask') return;
+    if (segments.length === 0) return;
     if (didInitDefaultNo.current) return;
     didInitDefaultNo.current = true;
     goToNewTask();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [defaultNo, step, openTag]);
+  }, [defaultNo, step, segments.length, defaultTagForForm]);
 
   const handleAddCorp = async () => {
     const name = newCorpDraft.trim();

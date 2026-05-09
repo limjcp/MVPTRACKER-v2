@@ -291,7 +291,18 @@ export function useSupabaseSync(enabled: boolean) {
 
         // Rollups (last 30 days)
         const anchorDate = new Date();
-        const daily = computeDailyStats(activities, manualEntries, 30, anchorDate, settings.idleThreshold);
+        const lastIso = useStore.getState().lastAutomaticPollAt;
+        const lastPollDt = lastIso ? new Date(lastIso) : null;
+        const lastAutomaticPollAt =
+          lastPollDt && !Number.isNaN(lastPollDt.getTime()) ? lastPollDt : null;
+        const daily = computeDailyStats(
+          activities,
+          manualEntries,
+          30,
+          anchorDate,
+          settings.idleThreshold,
+          lastAutomaticPollAt
+        );
         await upsertAll(
           'user_daily_stats',
           daily.map((d) => ({

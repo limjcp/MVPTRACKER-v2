@@ -173,6 +173,11 @@ fn add_schema_columns(conn: &Connection) -> rusqlite::Result<()> {
   let _ = conn.execute("ALTER TABLE projects ADD COLUMN team_label TEXT", []);
   let _ = conn.execute("ALTER TABLE activities ADD COLUMN display_label TEXT", []);
   let _ = conn.execute("ALTER TABLE block_tags ADD COLUMN segment_id TEXT", []);
+  let _ = conn.execute("ALTER TABLE activities ADD COLUMN tracking_session_id TEXT", []);
+  let _ = conn.execute(
+    "UPDATE activities SET tracking_session_id = 'legacy' WHERE tracking_session_id IS NULL",
+    [],
+  );
   Ok(())
 }
 
@@ -352,13 +357,16 @@ pub struct ActivityRow {
   pub productivity: i64,
   pub activity_type: String,
   pub display_label: Option<String>,
+  /// Groups automatic slices per app launch; used to ignore idle across downtime.
+  pub tracking_session_id: Option<String>,
 }
 
 pub fn list_activities(conn: &Connection) -> rusqlite::Result<Vec<ActivityRow>> {
   let mut stmt = conn.prepare(
     r#"
     SELECT id, app_name, window_title, url, file_path, start_time, end_time, duration,
-           project_id, category, productivity, activity_type, display_label
+           project_id, category, productivity, activity_type, display_label,
+           tracking_session_id
     FROM activities
     ORDER BY start_time DESC
   "#,
@@ -378,6 +386,7 @@ pub fn list_activities(conn: &Connection) -> rusqlite::Result<Vec<ActivityRow>> 
       productivity: r.get(10)?,
       activity_type: r.get(11)?,
       display_label: r.get(12)?,
+      tracking_session_id: r.get(13)?,
     })
   })?;
   rows.collect()
@@ -387,8 +396,8 @@ pub fn upsert_activity(conn: &Connection, a: &ActivityRow) -> rusqlite::Result<(
   conn.execute(
     r#"
     INSERT INTO activities (id, app_name, window_title, url, file_path, start_time, end_time, duration,
-      project_id, category, productivity, activity_type, display_label)
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+      project_id, category, productivity, activity_type, display_label, tracking_session_id)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
     ON CONFLICT(id) DO UPDATE SET
       app_name = excluded.app_name,
       window_title = excluded.window_title,
@@ -401,7 +410,8 @@ pub fn upsert_activity(conn: &Connection, a: &ActivityRow) -> rusqlite::Result<(
       category = excluded.category,
       productivity = excluded.productivity,
       activity_type = excluded.activity_type,
-      display_label = excluded.display_label
+      display_label = excluded.display_label,
+      tracking_session_id = excluded.tracking_session_id
   "#,
     params![
       a.id,
@@ -416,7 +426,8 @@ pub fn upsert_activity(conn: &Connection, a: &ActivityRow) -> rusqlite::Result<(
       a.category,
       a.productivity,
       a.activity_type,
-      a.display_label
+      a.display_label,
+      a.tracking_session_id
     ],
   )?;
   Ok(())

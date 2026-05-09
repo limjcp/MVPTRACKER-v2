@@ -82,7 +82,27 @@ fn build_tray(app: &tauri::AppHandle) -> Result<(), tauri::Error> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-  tauri::Builder::default()
+  let mut builder = tauri::Builder::default();
+
+  #[cfg(desktop)]
+  {
+    builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+      if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.set_focus();
+      }
+      let handle = app.clone();
+      std::thread::spawn(move || {
+        let _ = handle
+          .dialog()
+          .message("MVPTime is already running.")
+          .title("MVPTime")
+          .blocking_show();
+      });
+    }));
+  }
+
+  builder
     .plugin(tauri_plugin_dialog::init())
     .plugin(tauri_plugin_process::init())
     .plugin(tauri_plugin_updater::Builder::new().build())

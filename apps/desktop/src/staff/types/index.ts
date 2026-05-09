@@ -51,6 +51,8 @@ export interface ActivityEntry {
   category: AppCategory;
   productivity: number; // -1 = unproductive, 0 = neutral, 1 = productive
   type: 'automatic' | 'manual' | 'calendar';
+  /** Automatic slices only: session boundary from last hydrate / app launch (`legacy` for pre-migration rows). */
+  trackingSessionId?: string;
 }
 
 export interface ManualEntry {

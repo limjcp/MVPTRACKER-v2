@@ -374,12 +374,13 @@ export function mergeOverlappingTimelineBlocks(
   );
 }
 
-/** Gaps between automatic slices (and trailing gap on anchor day) counted as idle when ≥ threshold. */
+/** Gaps between automatic slices in the same tracking session; trailing gap only until last poll while app ran. */
 function computeIdleSecondsForDay(
   dateStr: string,
   activities: ActivityEntry[],
   idleThresholdMinutes: number,
-  anchorDate: Date
+  anchorDate: Date,
+  lastAutomaticPollAt: Date | null
 ): number {
   const thresholdSec = Math.max(0, idleThresholdMinutes) * 60;
   const auto = activities
@@ -388,6 +389,9 @@ function computeIdleSecondsForDay(
 
   let idle = 0;
   for (let i = 0; i < auto.length - 1; i++) {
+    const sidA = auto[i]!.trackingSessionId;
+    const sidB = auto[i + 1]!.trackingSessionId;
+    if (!sidA || !sidB || sidA !== sidB) continue;
     const end = parseISO(auto[i]!.endTime).getTime();
     const nextStart = parseISO(auto[i + 1]!.startTime).getTime();
     const gapSec = Math.max(0, Math.round((nextStart - end) / 1000));
@@ -395,9 +399,10 @@ function computeIdleSecondsForDay(
   }
 
   const todayStr = format(anchorDate, 'yyyy-MM-dd');
-  if (dateStr === todayStr && auto.length > 0) {
+  if (dateStr === todayStr && auto.length > 0 && lastAutomaticPollAt) {
+    const effectiveEndMs = Math.min(anchorDate.getTime(), lastAutomaticPollAt.getTime());
     const lastEnd = parseISO(auto[auto.length - 1]!.endTime).getTime();
-    const tailSec = Math.max(0, Math.round((anchorDate.getTime() - lastEnd) / 1000));
+    const tailSec = Math.max(0, Math.round((effectiveEndMs - lastEnd) / 1000));
     if (tailSec >= thresholdSec) idle += tailSec;
   }
 
@@ -583,7 +588,8 @@ export function computeDailyStats(
   manualEntries: ManualEntry[],
   days: number,
   anchorDate: Date,
-  idleThresholdMinutes: number = 2
+  idleThresholdMinutes: number = 2,
+  lastAutomaticPollAt: Date | null = null
 ): DailyStats[] {
   const out: DailyStats[] = [];
   const anchorDayStr = format(anchorDate, 'yyyy-MM-dd');
@@ -605,7 +611,23 @@ export function computeDailyStats(
     const productivityScore =
       denom > 0 ? Math.round((productiveTime / denom) * 100) : totalTime > 0 ? 50 : 0;
 
-    const idleTime = computeIdleSecondsForDay(dateStr, activities, idleThresholdMinutes, anchorDate);
+    let idleTime = computeIdleSecondsForDay(
+      dateStr,
+      activities,
+      idleThresholdMinutes,
+      anchorDate,
+      lastAutomaticPollAt
+    );
+
+    if (dateStr === anchorDayStr) {
+      const dayStartMs = parseISO(`${dateStr}T00:00:00`).getTime();
+      const boundaryEndMs = Math.min(
+        anchorDate.getTime(),
+        lastAutomaticPollAt?.getTime() ?? anchorDate.getTime()
+      );
+      const dayElapsedSec = Math.max(0, Math.round((boundaryEndMs - dayStartMs) / 1000));
+      idleTime = Math.min(idleTime, Math.max(0, dayElapsedSec - totalSec));
+    }
 
     const overlapDiagnostics =
       dateStr === anchorDayStr ? buildOverlapDiagnostics(clippedRows, totalTime) : undefined;

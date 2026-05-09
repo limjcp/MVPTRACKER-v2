@@ -2,7 +2,8 @@ import { useEffect, useRef } from 'react';
 import { differenceInMinutes, differenceInSeconds, parseISO } from 'date-fns';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { useStore } from './store/useStore';
-import type { ActivityEntry, AppSettings } from './types';
+import type { ActivityEntry } from './types';
+import { invalidateTrackingPrefsCache, loadTrackingPrefsFromDb } from './trackingPrefsCache';
 import { ACTIVITY_MERGE_GAP_MINUTES, titleMergeKey } from './utils/activityMerge';
 import { inferAppCategory, inferProductivityFromCategory } from './utils/appCategories';
 import { inferSystemProjectName, resolveProjectIdForSystemName } from './utils/systemProjects';
@@ -73,38 +74,9 @@ function normalizeActiveWindow(raw: unknown): ActiveWindowPayload {
   };
 }
 
-async function loadTrackingPrefs(): Promise<{ trackingEnabled: boolean; exclusionList: string[] }> {
-  const fallback = useStore.getState().settings;
-  if (!isTauri()) {
-    return {
-      trackingEnabled: fallback.trackingEnabled,
-      exclusionList: fallback.exclusionList,
-    };
-  }
-  try {
-    const json = await invoke<string | null>('db_get_settings');
-    if (!json) {
-      return {
-        trackingEnabled: fallback.trackingEnabled,
-        exclusionList: fallback.exclusionList,
-      };
-    }
-    const s = JSON.parse(json) as AppSettings;
-    return {
-      trackingEnabled: s.trackingEnabled ?? true,
-      exclusionList: Array.isArray(s.exclusionList) ? s.exclusionList : fallback.exclusionList,
-    };
-  } catch {
-    return {
-      trackingEnabled: fallback.trackingEnabled,
-      exclusionList: fallback.exclusionList,
-    };
-  }
-}
-
 /**
  * Polls foreground window (Windows) and merges time into `activities` via the store.
- * Reads tracking prefs from SQLite each tick so Admin portal changes apply without reload.
+ * Settings are read from SQLite with TTL (see trackingPrefsCache); invalidated on settings saves / window focus.
  */
 export function useAutomaticTracking(enabled = true) {
   const addActivity = useStore((s) => s.addActivity);
@@ -119,6 +91,7 @@ export function useAutomaticTracking(enabled = true) {
 
   useEffect(() => {
     if (!enabled || !isTauri()) {
+      useStore.getState().clearAutomaticPollBoundary();
       setIsTracking(false);
       setTrackingStatus('idle');
       setCurrentApp('');
@@ -127,18 +100,24 @@ export function useAutomaticTracking(enabled = true) {
       return;
     }
 
-    const intervalMs = 2000;
+    const intervalMs = 4500;
     let cancelled = false;
     let busy = false;
+
+    const onFocus = () => invalidateTrackingPrefsCache();
+    window.addEventListener('focus', onFocus);
 
     const tick = async () => {
       if (cancelled || busy) return;
       busy = true;
       try {
-        const { trackingEnabled, exclusionList } = await loadTrackingPrefs();
+        const { trackingEnabled, exclusionList } = await loadTrackingPrefsFromDb(() =>
+          useStore.getState().settings
+        );
         if (cancelled) return;
 
         if (!trackingEnabled) {
+          useStore.getState().clearAutomaticPollBoundary();
           setIsTracking(false);
           setTrackingStatus('idle');
           setCurrentApp('');
@@ -159,6 +138,8 @@ export function useAutomaticTracking(enabled = true) {
 
         const snap = normalizeActiveWindow(await invoke('get_active_window'));
         if (cancelled) return;
+
+        useStore.getState().touchAutomaticPollAt();
 
         if (!snap.available) {
           setIsTracking(false);
@@ -188,6 +169,9 @@ export function useAutomaticTracking(enabled = true) {
         const nowIso = new Date().toISOString();
         const nowDate = new Date(nowIso);
         const url = urlFromWindowTitle(title);
+
+        const sessionId =
+          useStore.getState().trackingSessionId.trim() || 'legacy';
 
         const resume = findResumableActivity(tKey, useStore.getState().activities, nowDate);
         if (resume) {
@@ -250,6 +234,7 @@ export function useAutomaticTracking(enabled = true) {
           category,
           productivity: inferProductivityFromCategory(category),
           type: 'automatic',
+          trackingSessionId: sessionId,
           ...(projectId ? { projectId } : {}),
         };
         addActivity(entry);
@@ -267,7 +252,9 @@ export function useAutomaticTracking(enabled = true) {
     const handle = window.setInterval(() => void tick(), intervalMs);
     return () => {
       cancelled = true;
+      window.removeEventListener('focus', onFocus);
       clearInterval(handle);
+      useStore.getState().clearAutomaticPollBoundary();
       setIsTracking(false);
       setTrackingStatus('idle');
       setCurrentApp('');
