@@ -8,9 +8,20 @@ import { toast } from 'sonner';
 const DEBOUNCE_MS = 12_000;
 const LS_DISMISSED_VERSION = 'mvptime:dismissedUpdaterVersion';
 
+function normalizeVersion(v: string | null | undefined): string | null {
+  const raw = (v ?? '').trim();
+  if (!raw) return null;
+  const noPrefix = raw.replace(/^v/i, '').trim();
+  const parts = noPrefix.split('.').map((p) => p.trim());
+  // Drop trailing ".0" segments so 0.1.2 == 0.1.2.0
+  while (parts.length > 1 && parts[parts.length - 1] === '0') parts.pop();
+  const out = parts.join('.');
+  return out ? out : null;
+}
+
 function readDismissedVersion(): string | null {
   try {
-    return localStorage.getItem(LS_DISMISSED_VERSION);
+    return normalizeVersion(localStorage.getItem(LS_DISMISSED_VERSION));
   } catch {
     return null;
   }
@@ -18,7 +29,9 @@ function readDismissedVersion(): string | null {
 
 function writeDismissedVersion(v: string) {
   try {
-    localStorage.setItem(LS_DISMISSED_VERSION, v);
+    const nv = normalizeVersion(v);
+    if (!nv) localStorage.removeItem(LS_DISMISSED_VERSION);
+    else localStorage.setItem(LS_DISMISSED_VERSION, nv);
   } catch {
     /* ignore */
   }
@@ -39,16 +52,16 @@ export function useAppUpdater(enabled: boolean) {
       ran.current = true;
       void (async () => {
         try {
-          const currentVersion = await getVersion().catch(() => null);
+          const currentVersion = normalizeVersion(await getVersion().catch(() => null));
           const update = await check();
           if (!update) return;
-          const version = update.version;
-          if (currentVersion && currentVersion === version) {
+          const version = normalizeVersion(update.version) ?? update.version;
+          if (currentVersion && normalizeVersion(version) === currentVersion) {
             // If we're already on that version, don't prompt and clear any stale dismissal.
-            if (readDismissedVersion() === version) writeDismissedVersion('');
+            if (readDismissedVersion() === normalizeVersion(version)) writeDismissedVersion('');
             return;
           }
-          if (readDismissedVersion() === version) return;
+          if (readDismissedVersion() === normalizeVersion(version)) return;
 
           const install = async (u: Update) => {
             if (installingRef.current) return;
