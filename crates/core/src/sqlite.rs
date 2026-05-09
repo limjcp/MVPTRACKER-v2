@@ -526,6 +526,165 @@ pub struct BlockTagRow {
   pub segment_id: Option<String>,
 }
 
+/// Stable `block_tags` row id for a task segment (`segmentTag:<uuid>` — matches frontend).
+pub fn segment_block_tag_id(segment_id: &str) -> String {
+  format!("segmentTag:{segment_id}")
+}
+
+pub fn get_block_tag_for_segment(
+  conn: &Connection,
+  segment_id: &str,
+) -> rusqlite::Result<Option<BlockTagRow>> {
+  let stable_id = segment_block_tag_id(segment_id);
+  let mut stmt = conn.prepare(
+    r#"
+    SELECT id, bucket_date, bucket_start, bucket_end, corporation_id, task_type, task_type_detail, updated_at,
+           segment_id
+    FROM block_tags
+    WHERE segment_id = ?1 OR id = ?2
+    LIMIT 1
+  "#,
+  )?;
+  let mut rows = stmt.query(params![segment_id, stable_id])?;
+  let Some(row) = rows.next()? else {
+    return Ok(None);
+  };
+  Ok(Some(BlockTagRow {
+    id: row.get(0)?,
+    bucket_date: row.get(1)?,
+    bucket_start: row.get(2)?,
+    bucket_end: row.get(3)?,
+    corporation_id: row.get(4)?,
+    task_type: row.get(5)?,
+    task_type_detail: row.get(6)?,
+    updated_at: row.get(7)?,
+    segment_id: row.get::<_, Option<String>>(8)?,
+  }))
+}
+
+fn block_tag_has_content(t: &BlockTagRow) -> bool {
+  let corp_ok = t
+    .corporation_id
+    .as_ref()
+    .map(|s| !s.trim().is_empty())
+    .unwrap_or(false);
+  let task_ok = t
+    .task_type
+    .as_ref()
+    .map(|s| !s.trim().is_empty())
+    .unwrap_or(false);
+  let detail_ok = t
+    .task_type_detail
+    .as_ref()
+    .map(|s| !s.trim().is_empty())
+    .unwrap_or(false);
+  corp_ok || task_ok || detail_ok
+}
+
+/// Writes corp/task onto `new_segment_id` from an existing tag row (same stable id scheme as frontend).
+fn clone_block_tag_to_new_segment(
+  conn: &Connection,
+  src: &BlockTagRow,
+  new_segment_id: &str,
+  now_iso: &str,
+) -> rusqlite::Result<()> {
+  if !block_tag_has_content(src) {
+    return Ok(());
+  }
+  let bucket_date = now_iso
+    .get(..10)
+    .map(str::to_string)
+    .unwrap_or_else(|| "1970-01-01".to_string());
+  let new_row = BlockTagRow {
+    id: segment_block_tag_id(new_segment_id),
+    bucket_date,
+    bucket_start: now_iso.to_string(),
+    bucket_end: now_iso.to_string(),
+    corporation_id: src.corporation_id.clone(),
+    task_type: src.task_type.clone(),
+    task_type_detail: src.task_type_detail.clone(),
+    updated_at: now_iso.to_string(),
+    segment_id: Some(new_segment_id.to_string()),
+  };
+  set_block_tag(conn, &new_row)?;
+  Ok(())
+}
+
+fn copy_closed_segment_tags_to_new_open_segment(
+  conn: &Connection,
+  closed_segment_id: &str,
+  new_segment_id: &str,
+  now_iso: &str,
+) -> rusqlite::Result<()> {
+  let Some(src) = get_block_tag_for_segment(conn, closed_segment_id)? else {
+    return Ok(());
+  };
+  clone_block_tag_to_new_segment(conn, &src, new_segment_id, now_iso)
+}
+
+/// When the segment we closed had no tags, copy from the latest closed segment that does (user expectation: “last block”).
+fn copy_tag_from_most_recent_closed_segment_with_content(
+  conn: &Connection,
+  new_segment_id: &str,
+  now_iso: &str,
+) -> rusqlite::Result<()> {
+  if get_block_tag_for_segment(conn, new_segment_id)?
+    .map(|t| block_tag_has_content(&t))
+    .unwrap_or(false)
+  {
+    return Ok(());
+  }
+
+  let mut stmt = conn.prepare(
+    r#"
+    SELECT id FROM task_segments
+    WHERE end_time IS NOT NULL AND id != ?1
+    ORDER BY end_time DESC
+    LIMIT 80
+  "#,
+  )?;
+  let ids: Vec<String> = stmt
+    .query_map(params![new_segment_id], |r| r.get::<_, String>(0))?
+    .collect::<rusqlite::Result<_>>()?;
+
+  for sid in ids {
+    if let Some(src) = get_block_tag_for_segment(conn, &sid)? {
+      if block_tag_has_content(&src) {
+        return clone_block_tag_to_new_segment(conn, &src, new_segment_id, now_iso);
+      }
+    }
+  }
+
+  // Legacy tags saved only with bucket id (no segment_id): use most recently updated row with corp/task.
+  let mut stmt = conn.prepare(
+    r#"
+    SELECT corporation_id, task_type, task_type_detail
+    FROM block_tags
+    ORDER BY updated_at DESC
+    LIMIT 40
+  "#,
+  )?;
+  let mut rows = stmt.query([])?;
+  while let Some(r) = rows.next()? {
+    let synthetic = BlockTagRow {
+      id: String::new(),
+      bucket_date: String::new(),
+      bucket_start: String::new(),
+      bucket_end: String::new(),
+      corporation_id: r.get(0)?,
+      task_type: r.get(1)?,
+      task_type_detail: r.get(2)?,
+      updated_at: String::new(),
+      segment_id: None,
+    };
+    if block_tag_has_content(&synthetic) {
+      return clone_block_tag_to_new_segment(conn, &synthetic, new_segment_id, now_iso);
+    }
+  }
+
+  Ok(())
+}
+
 pub fn list_block_tags(conn: &Connection) -> rusqlite::Result<Vec<BlockTagRow>> {
   let mut stmt = conn.prepare(
     r#"
@@ -689,19 +848,27 @@ pub fn ensure_open_task_segment(
   now_iso: &str,
   max_gap_seconds: u64,
 ) -> rusqlite::Result<TaskSegmentRow> {
-  fn parse_rfc3339(iso: &str) -> Option<DateTime<FixedOffset>> {
-    DateTime::parse_from_rfc3339(iso).ok()
+  /// RFC3339 plus common SQLite / JS variants (space vs `T`) so stale-open splits still run.
+  fn parse_iso_flexible(iso: &str) -> Option<DateTime<FixedOffset>> {
+    let t = iso.trim();
+    if t.is_empty() {
+      return None;
+    }
+    DateTime::parse_from_rfc3339(t).ok().or_else(|| {
+      let normalized = t.replacen(' ', "T", 1);
+      DateTime::parse_from_rfc3339(normalized.trim()).ok()
+    })
   }
 
   if let Some(open) = get_open_task_segment(conn)? {
     // Guard against “bridging” app downtime: if the app wasn’t active recently,
     // close the old open segment and start a new one at now.
-    let now_dt = parse_rfc3339(now_iso);
+    let now_dt = parse_iso_flexible(now_iso);
     let anchor_iso = open
       .last_prompt_at
       .as_deref()
       .unwrap_or(open.start_time.as_str());
-    let anchor_dt = parse_rfc3339(anchor_iso);
+    let anchor_dt = parse_iso_flexible(anchor_iso);
     if let (Some(now_dt), Some(anchor_dt)) = (now_dt, anchor_dt) {
       let gap = now_dt.signed_duration_since(anchor_dt);
       if gap > Duration::seconds(max_gap_seconds as i64) {
@@ -721,6 +888,8 @@ pub fn ensure_open_task_segment(
           last_prompt_at: None,
         };
         upsert_task_segment(conn, &row)?;
+        copy_closed_segment_tags_to_new_open_segment(conn, &open.id, new_id, now_iso)?;
+        copy_tag_from_most_recent_closed_segment_with_content(conn, new_id, now_iso)?;
         return Ok(row);
       }
     }
@@ -735,9 +904,11 @@ pub fn ensure_open_task_segment(
   "#,
     params![new_id, now_iso],
   )?;
-  get_open_task_segment(conn)?.ok_or_else(|| {
+  let row = get_open_task_segment(conn)?.ok_or_else(|| {
     rusqlite::Error::ToSqlConversionFailure("task_segments insert did not leave an open row".into())
-  })
+  })?;
+  copy_tag_from_most_recent_closed_segment_with_content(conn, &row.id, now_iso)?;
+  Ok(row)
 }
 
 #[cfg(test)]
@@ -800,6 +971,121 @@ mod tests {
     let kept = ensure_open_task_segment(&conn, "new", now, 5 * 60).unwrap();
     assert_eq!(kept.id, "old");
     assert!(kept.end_time.is_none());
+  }
+
+  #[test]
+  fn ensure_open_task_segment_copies_segment_tag_when_splitting() {
+    let conn = Connection::open_in_memory().unwrap();
+    migrate(&conn).unwrap();
+
+    upsert_corporation(
+      &conn,
+      &CorporationRow {
+        id: "corp-split-test".to_string(),
+        name: "Split Corp".to_string(),
+        created_at: "2026-04-27T10:00:00+00:00".to_string(),
+      },
+    )
+    .unwrap();
+
+    let old = TaskSegmentRow {
+      id: "old-split".to_string(),
+      start_time: "2026-04-27T10:00:00+00:00".to_string(),
+      end_time: None,
+      title: None,
+      created_at: "2026-04-27T10:00:00+00:00".to_string(),
+      last_prompt_at: Some("2026-04-27T10:05:00+00:00".to_string()),
+    };
+    upsert_task_segment(&conn, &old).unwrap();
+
+    set_block_tag(
+      &conn,
+      &BlockTagRow {
+        id: segment_block_tag_id("old-split"),
+        bucket_date: "2026-04-27".to_string(),
+        bucket_start: "2026-04-27T10:00:00+00:00".to_string(),
+        bucket_end: "2026-04-27T10:00:00+00:00".to_string(),
+        corporation_id: Some("corp-split-test".to_string()),
+        task_type: Some("meeting".to_string()),
+        task_type_detail: Some("standup".to_string()),
+        updated_at: "2026-04-27T10:00:00+00:00".to_string(),
+        segment_id: Some("old-split".to_string()),
+      },
+    )
+    .unwrap();
+
+    let now = "2026-04-28T10:00:00+00:00";
+    ensure_open_task_segment(&conn, "new-split", now, 5 * 60).unwrap();
+
+    let new_tag = get_block_tag_for_segment(&conn, "new-split")
+      .unwrap()
+      .expect("tag should be copied to new open segment");
+    assert_eq!(new_tag.corporation_id.as_deref(), Some("corp-split-test"));
+    assert_eq!(new_tag.task_type.as_deref(), Some("meeting"));
+    assert_eq!(new_tag.task_type_detail.as_deref(), Some("standup"));
+    assert_eq!(new_tag.segment_id.as_deref(), Some("new-split"));
+    assert_eq!(new_tag.id, segment_block_tag_id("new-split"));
+  }
+
+  #[test]
+  fn ensure_open_fallback_when_stale_open_has_no_tag() {
+    let conn = Connection::open_in_memory().unwrap();
+    migrate(&conn).unwrap();
+
+    upsert_corporation(
+      &conn,
+      &CorporationRow {
+        id: "corp-fb".to_string(),
+        name: "FB Corp".to_string(),
+        created_at: "2026-04-26T10:00:00+00:00".to_string(),
+      },
+    )
+    .unwrap();
+
+    let older_closed = TaskSegmentRow {
+      id: "older".to_string(),
+      start_time: "2026-04-26T09:00:00+00:00".to_string(),
+      end_time: Some("2026-04-26T17:00:00+00:00".to_string()),
+      title: None,
+      created_at: "2026-04-26T09:00:00+00:00".to_string(),
+      last_prompt_at: None,
+    };
+    upsert_task_segment(&conn, &older_closed).unwrap();
+    set_block_tag(
+      &conn,
+      &BlockTagRow {
+        id: segment_block_tag_id("older"),
+        bucket_date: "2026-04-26".to_string(),
+        bucket_start: "2026-04-26T09:00:00+00:00".to_string(),
+        bucket_end: "2026-04-26T17:00:00+00:00".to_string(),
+        corporation_id: Some("corp-fb".to_string()),
+        task_type: Some("email".to_string()),
+        task_type_detail: None,
+        updated_at: "2026-04-26T17:00:00+00:00".to_string(),
+        segment_id: Some("older".to_string()),
+      },
+    )
+    .unwrap();
+
+    let stale_open = TaskSegmentRow {
+      id: "stale-open".to_string(),
+      start_time: "2026-04-27T10:00:00+00:00".to_string(),
+      end_time: None,
+      title: None,
+      created_at: "2026-04-27T10:00:00+00:00".to_string(),
+      last_prompt_at: Some("2026-04-27T10:05:00+00:00".to_string()),
+    };
+    upsert_task_segment(&conn, &stale_open).unwrap();
+    // Deliberately no block_tags row for stale-open
+
+    let now = "2026-04-28T10:00:00+00:00";
+    ensure_open_task_segment(&conn, "after-reopen", now, 5 * 60).unwrap();
+
+    let tag = get_block_tag_for_segment(&conn, "after-reopen")
+      .unwrap()
+      .expect("should inherit from older closed segment");
+    assert_eq!(tag.corporation_id.as_deref(), Some("corp-fb"));
+    assert_eq!(tag.task_type.as_deref(), Some("email"));
   }
 }
 

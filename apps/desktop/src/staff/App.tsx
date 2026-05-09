@@ -8,6 +8,7 @@ import Projects from './components/Projects';
 import Reports from './components/Reports';
 import TaskCheckInPanel from './components/TaskCheckInPanel';
 import CurrentUserMenu from '../components/CurrentUserMenu';
+import TitleBarBrandLabel from '../components/TitleBarBrandLabel';
 
 export default function App() {
   const [searchParams] = useSearchParams();
@@ -39,7 +40,7 @@ export default function App() {
           <div className="w-3 h-3 rounded-full bg-green-500/80 hover:bg-green-500 cursor-pointer transition-colors" /> */}
         </div>
         <div className="absolute inset-x-0 flex items-center justify-center pointer-events-none">
-          <span className="text-white/20 text-[11px] font-medium">MVPTime — Staff</span>
+          <TitleBarBrandLabel mode="Staff" />
         </div>
         <div className="ml-auto flex items-center gap-2 select-auto">
           <CurrentUserMenu variant="titlebar" />

@@ -65,6 +65,80 @@ function isTauriRuntime() {
   return isTauri();
 }
 
+function parseIsoMs(iso: string): number {
+  const n = Date.parse(iso);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function findBlockTagForSegment(blockTags: BlockTag[], segmentId: string): BlockTag | undefined {
+  const stable = blockSegmentTagId(segmentId);
+  return blockTags.find((t) => t.segmentId === segmentId || t.id === stable);
+}
+
+function blockTagHasCorpOrTask(t: BlockTag | undefined): boolean {
+  if (!t) return false;
+  const c = t.corporationId?.trim();
+  const tt = t.taskType?.trim();
+  const td = t.taskTypeDetail?.trim();
+  return Boolean(c || tt || td);
+}
+
+/**
+ * If the open task segment has no corp/task in SQLite-backed tags, copy from the last closed
+ * tagged segment (or latest legacy bucket tag). Hydrate must load block_tags *after*
+ * `db_ensure_open_task_segment` so Rust-written tags are visible; this also patches gaps.
+ */
+async function ensureOpenSegmentTagFromHistory(
+  taskSegments: TaskSegment[],
+  blockTags: BlockTag[],
+  nowIso: string
+): Promise<BlockTag[]> {
+  const open = taskSegments.find((s) => !s.endTime);
+  if (!open) return blockTags;
+  if (blockTagHasCorpOrTask(findBlockTagForSegment(blockTags, open.id))) {
+    return blockTags;
+  }
+
+  const closed = taskSegments
+    .filter((s) => s.endTime && s.id !== open.id)
+    .sort((a, b) => parseIsoMs(b.endTime!) - parseIsoMs(a.endTime!));
+
+  let donor: BlockTag | undefined;
+  for (const s of closed) {
+    const t = findBlockTagForSegment(blockTags, s.id);
+    if (blockTagHasCorpOrTask(t)) {
+      donor = t;
+      break;
+    }
+  }
+
+  if (!donor) {
+    donor = [...blockTags]
+      .filter((t) => !t.segmentId && blockTagHasCorpOrTask(t))
+      .sort((a, b) => parseIsoMs(b.updatedAt) - parseIsoMs(a.updatedAt))[0];
+  }
+
+  if (!donor) return blockTags;
+
+  const bucketDate = nowIso.slice(0, 10);
+  const merged: BlockTag = {
+    id: blockSegmentTagId(open.id),
+    bucketDate,
+    bucketStart: nowIso,
+    bucketEnd: nowIso,
+    segmentId: open.id,
+    corporationId: donor.corporationId,
+    taskType: donor.taskType,
+    taskTypeDetail: donor.taskTypeDetail,
+    updatedAt: nowIso,
+  };
+  await invoke('db_set_block_tag', { tag: toBlockTagRow(merged) });
+  return [
+    ...blockTags.filter((t) => t.segmentId !== open.id && t.id !== merged.id),
+    merged,
+  ];
+}
+
 function toProjectRow(p: Project) {
   return {
     id: p.id,
@@ -457,17 +531,19 @@ export const useStore = create<AppState>((set, get) => ({
     const corporationRows = await invoke<any[]>('db_list_corporations');
     const corporations = corporationRows.map(fromCorporationRow);
 
-    const blockTagRows = await invoke<any[]>('db_list_block_tags');
-    const blockTags = blockTagRows.map(fromBlockTagRow);
-
     const ensureSegId = crypto.randomUUID();
+    const nowIso = new Date().toISOString();
     await invoke('db_ensure_open_task_segment', {
       newId: ensureSegId,
-      nowIso: new Date().toISOString(),
+      nowIso,
       maxGapSeconds: 5 * 60,
     });
     const segmentRows = await invoke<any[]>('db_list_task_segments');
     const taskSegments = segmentRows.map(fromTaskSegmentRow);
+
+    let blockTagRows = await invoke<any[]>('db_list_block_tags');
+    let blockTags = blockTagRows.map(fromBlockTagRow);
+    blockTags = await ensureOpenSegmentTagFromHistory(taskSegments, blockTags, nowIso);
 
     set({
       projects,

@@ -7,6 +7,7 @@ import Security from '../admin/components/Security';
 import { useAdminSettingsStore } from '../admin/store/useAdminSettingsStore';
 import type { AdminView } from '../admin/types/adminView';
 import CurrentUserMenu from '../components/CurrentUserMenu';
+import TitleBarBrandLabel from '../components/TitleBarBrandLabel';
 
 export default function AdminRoot() {
   const [currentView, setCurrentView] = useState<AdminView>('overview');
@@ -25,7 +26,7 @@ export default function AdminRoot() {
           <div className="w-3 h-3 rounded-full bg-green-500/80 hover:bg-green-500 cursor-pointer transition-colors" /> */}
         </div>
         <div className="absolute inset-x-0 flex items-center justify-center pointer-events-none">
-          <span className="text-white/20 text-[11px] font-medium">MVPTime — Admin</span>
+          <TitleBarBrandLabel mode="Admin" />
         </div>
         <div className="ml-auto flex items-center gap-2 select-auto">
           <CurrentUserMenu variant="titlebar" />
