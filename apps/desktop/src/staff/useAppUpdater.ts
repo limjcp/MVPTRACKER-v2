@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
+import { getVersion } from '@tauri-apps/api/app';
 import { check, type Update } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { toast } from 'sonner';
@@ -28,6 +29,7 @@ function writeDismissedVersion(v: string) {
  */
 export function useAppUpdater(enabled: boolean) {
   const ran = useRef(false);
+  const installingRef = useRef(false);
 
   useEffect(() => {
     if (!enabled || !isTauri()) return;
@@ -37,20 +39,36 @@ export function useAppUpdater(enabled: boolean) {
       ran.current = true;
       void (async () => {
         try {
+          const currentVersion = await getVersion().catch(() => null);
           const update = await check();
           if (!update) return;
           const version = update.version;
+          if (currentVersion && currentVersion === version) {
+            // If we're already on that version, don't prompt and clear any stale dismissal.
+            if (readDismissedVersion() === version) writeDismissedVersion('');
+            return;
+          }
           if (readDismissedVersion() === version) return;
 
           const install = async (u: Update) => {
+            if (installingRef.current) return;
+            installingRef.current = true;
+            // Avoid re-prompting this same version if the app closes during install.
+            writeDismissedVersion(version);
             const tid = toast.loading('Downloading update…');
             try {
               await u.downloadAndInstall();
               toast.dismiss(tid);
-              await relaunch();
+              toast.message('Update installed. Restarting…');
+              // Some environments close the app during install; relaunch is best-effort.
+              window.setTimeout(() => {
+                void relaunch();
+              }, 350);
             } catch (e) {
               toast.dismiss(tid);
               toast.error(e instanceof Error ? e.message : 'Update failed');
+              // Allow retry if install failed.
+              installingRef.current = false;
             }
           };
 
