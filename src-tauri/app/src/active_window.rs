@@ -89,14 +89,14 @@ fn snapshot_macos() -> ActiveWindowInfo {
 
 #[cfg(target_os = "macos")]
 fn snapshot_macos_on_main_thread() -> ActiveWindowInfo {
-  use dispatch2::Queue;
+  use dispatch2::run_on_main;
   use objc2::msg_send;
   use objc2_app_kit::NSWorkspace;
 
-  let q = Queue::main();
-  // If we're already on main, `sync` is fine; otherwise it hops to the main queue.
-  // We keep the critical section small and purely reads of foreground state.
-  q.sync(|| {
+  // `run_on_main` runs the closure on the main thread synchronously (passing through if
+  // we're already on it). AppKit APIs like NSWorkspace are not thread-safe, so we keep
+  // the critical section small and purely reads of foreground state.
+  run_on_main(|_mtm| {
     let frontmost = unsafe {
       let ws = NSWorkspace::sharedWorkspace();
       ws.frontmostApplication()
