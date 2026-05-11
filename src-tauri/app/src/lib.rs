@@ -37,6 +37,9 @@ fn close_open_task_segment_best_effort(app: &tauri::AppHandle) {
 
 fn hide_main_window(window: &tauri::WebviewWindow) {
   let _ = window.hide();
+  // On macOS, hiding + skip-taskbar can make re-activating the app unreliable.
+  // Prefer to only hide and let Dock activation bring the window back.
+  #[cfg(not(target_os = "macos"))]
   let _ = window.set_skip_taskbar(true);
 }
 
@@ -169,8 +172,21 @@ pub fn run() {
 
       Ok(())
     })
-    .run(tauri::generate_context!())
-    .expect("error while running tauri application");
+    .build(tauri::generate_context!())
+    .expect("error while building tauri application")
+    .run(|app, _event| {
+      // macOS: clicking the Dock icon / re-activating the app should restore the hidden window.
+      #[cfg(target_os = "macos")]
+      {
+        if let tauri::RunEvent::Resumed = _event {
+          if let Some(w) = app.get_webview_window("main") {
+            show_main_window(&w);
+          }
+        }
+      }
+
+      let _ = app; // keep closure signature uniform for cfg blocks
+    });
 }
 
 #[tauri::command]

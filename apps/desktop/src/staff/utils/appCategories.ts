@@ -469,3 +469,28 @@ export function effectiveActivityProductivity(a: Pick<ActivityEntry, 'productivi
   if (a.productivity !== 0) return a.productivity;
   return inferProductivityFromCategory(a.category);
 }
+
+function titleHasProductiveKeyword(windowTitle: string): boolean {
+  const t = windowTitle.trim().toLowerCase();
+  if (!t) return false;
+  return t.includes('synology') || t.includes('mvp') || t.includes('condos');
+}
+
+function isProductiveFileManager(appName: string): boolean {
+  const p = normProcess(appName);
+  return p === 'explorer' || p === 'finder';
+}
+
+/**
+ * Productivity score for newly tracked automatic activity.
+ * If user later edits productivity, the stored value should be respected.
+ */
+export function inferProductivityForActivityContext(
+  appName: string,
+  windowTitle: string,
+  category: AppCategory
+): -1 | 0 | 1 {
+  if (titleHasProductiveKeyword(windowTitle)) return 1;
+  if (isProductiveFileManager(appName)) return 1;
+  return inferProductivityFromCategory(category);
+}

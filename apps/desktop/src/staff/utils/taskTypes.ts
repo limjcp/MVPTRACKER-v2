@@ -32,6 +32,9 @@ export const TASK_TYPES: readonly TaskTypeOption[] = [
     slug: 'site_walk',
     label: 'Site walk with board / manager / owner / vendor / engineer',
   },
+  { slug: 'sparcpay', label: 'Sparcpay' },
+  { slug: 'quickbooks', label: 'Quickbooks' },
+  { slug: 'rotessa', label: 'Rotessa' },
 ] as const;
 
 export const OTHER_TASK_SLUG = 'other';

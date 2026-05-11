@@ -1,0 +1,62 @@
+name: Test Build (macOS Universal)
+
+on:
+  workflow_dispatch: # Allows you to run this workflow manually from the Actions tab
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+# We need write permissions to publish a release
+permissions:
+  contents: write
+
+jobs:
+  macos-universal:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - run: npm ci
+
+      - name: Configure updater endpoint
+        run: node scripts/set-updater-endpoint.cjs
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            src-tauri/app
+
+      - name: Build (Tauri) macOS universal
+        run: npx tauri build --config src-tauri/app/tauri.conf.json --target universal-apple-darwin
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "12.0"
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      - name: Publish to Test Pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: test-build-macos
+          name: "macOS Universal Test Build"
+          body: "This is an automated test build generated from the `Test Build (macOS Universal)` workflow."
+          prerelease: true # Keeps it marked as a pre-release
+          make_latest: false # Explicitly prevents this from becoming the latest release
+          files: |
+            src-tauri/app/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+            src-tauri/app/target/universal-apple-darwin/release/bundle/macos/*.tar.gz
+            src-tauri/app/target/universal-apple-darwin/release/bundle/macos/*.sig
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -888,6 +888,18 @@ dependencies = [
 
 [[package]]
 name = "dispatch2"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a0d569e003ff27784e0e14e4a594048698e0c0f0b66cabcb51511be55a7caa0"
+dependencies = [
+ "bitflags 2.11.1",
+ "block2 0.6.2",
+ "libc",
+ "objc2 0.6.4",
+]
+
+[[package]]
+name = "dispatch2"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e0e367e4e7da84520dedcac1901e4da967309406d1e51017ae1abfb97adbd38"
@@ -2363,6 +2375,7 @@ dependencies = [
  "chrono",
  "core-foundation",
  "core-foundation-sys",
+ "dispatch2 0.2.0",
  "log",
  "mvptime_core",
  "objc2 0.5.2",
@@ -2555,7 +2568,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a180dd8642fa45cdb7dd721cd4c11b1cadd4929ce112ebd8b9f5803cc79d536"
 dependencies = [
  "bitflags 2.11.1",
- "dispatch2",
+ "dispatch2 0.3.1",
  "objc2 0.6.4",
 ]
 
@@ -2566,7 +2579,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e022c9d066895efa1345f8e33e584b9f958da2fd4cd116792e15e07e4720a807"
 dependencies = [
  "bitflags 2.11.1",
- "dispatch2",
+ "dispatch2 0.3.1",
  "objc2 0.6.4",
  "objc2-core-foundation",
  "objc2-io-surface",
@@ -3452,7 +3465,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a15ad77d9e70a92437d8f74c35d99b4e4691128df018833e99f90bcd36152672"
 dependencies = [
  "block2 0.6.2",
- "dispatch2",
+ "dispatch2 0.3.1",
  "glib-sys",
  "gobject-sys",
  "gtk-sys",
@@ -4233,7 +4246,7 @@ dependencies = [
  "core-foundation",
  "core-graphics",
  "crossbeam-channel",
- "dispatch2",
+ "dispatch2 0.3.1",
  "dlopen2",
  "dpi",
  "gdkwayland-sys",

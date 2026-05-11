@@ -1,0 +1,60 @@
+name: Test Build (Windows)
+
+on:
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+# We need write permissions to publish a release
+permissions:
+  contents: write
+
+jobs:
+  windows-x64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - run: npm ci
+
+      - name: Configure updater endpoint
+        run: node scripts/set-updater-endpoint.cjs
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            src-tauri/app
+
+      - name: Build (Tauri) Windows
+        run: npm run tauri:build
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      - name: Publish to Test Pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: test-build-windows
+          name: "Windows Test Build"
+          body: "This is an automated test build generated from the `Test Build (Windows)` workflow."
+          prerelease: true # Keeps it marked as a pre-release so it doesn't show as 'Latest'
+          make_latest: false # Explicitly prevents this from becoming the latest release
+          files: |
+            src-tauri/app/target/**/release/bundle/**/*.exe
+            src-tauri/app/target/**/release/bundle/**/*.msi
+            src-tauri/app/target/**/release/bundle/**/*.zip
+            src-tauri/app/target/**/release/mvptime.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -82,44 +82,57 @@ fn snapshot_windows() -> ActiveWindowInfo {
 
 #[cfg(target_os = "macos")]
 fn snapshot_macos() -> ActiveWindowInfo {
+  // AppKit APIs are not thread-safe; ensure we call them on the main thread.
+  // This avoids intermittent crashes when invoked from background threads.
+  snapshot_macos_on_main_thread()
+}
+
+#[cfg(target_os = "macos")]
+fn snapshot_macos_on_main_thread() -> ActiveWindowInfo {
+  use dispatch2::Queue;
   use objc2::msg_send;
   use objc2_app_kit::NSWorkspace;
 
-  let frontmost = unsafe {
-    let ws = NSWorkspace::sharedWorkspace();
-    ws.frontmostApplication()
-  };
-
-  let Some(app) = frontmost else {
-    return ActiveWindowInfo {
-      process_name: String::new(),
-      window_title: String::new(),
-      available: true,
+  let q = Queue::main();
+  // If we're already on main, `sync` is fine; otherwise it hops to the main queue.
+  // We keep the critical section small and purely reads of foreground state.
+  q.sync(|| {
+    let frontmost = unsafe {
+      let ws = NSWorkspace::sharedWorkspace();
+      ws.frontmostApplication()
     };
-  };
 
-  let process_name = unsafe {
-    app
-      .localizedName()
-      .map(|s| s.to_string())
-      .or_else(|| app.bundleIdentifier().map(|s| s.to_string()))
-      .unwrap_or_default()
-  };
+    let Some(app) = frontmost else {
+      return ActiveWindowInfo {
+        process_name: String::new(),
+        window_title: String::new(),
+        available: true,
+      };
+    };
 
-  // Window titles on macOS require Accessibility permission. If not granted, we still
-  // return the foreground app so tracking can proceed.
-  let window_title = if macos_accessibility_trusted(false) {
-    let pid: i32 = unsafe { msg_send![&*app, processIdentifier] };
-    macos_focused_window_title(pid)
-  } else {
-    String::new()
-  };
+    let process_name = unsafe {
+      app
+        .localizedName()
+        .map(|s| s.to_string())
+        .or_else(|| app.bundleIdentifier().map(|s| s.to_string()))
+        .unwrap_or_default()
+    };
 
-  ActiveWindowInfo {
-    process_name,
-    window_title,
-    available: true,
-  }
+    // Window titles on macOS require Accessibility permission. If not granted, we still
+    // return the foreground app so tracking can proceed.
+    let window_title = if macos_accessibility_trusted(false) {
+      let pid: i32 = unsafe { msg_send![&*app, processIdentifier] };
+      macos_focused_window_title(pid)
+    } else {
+      String::new()
+    };
+
+    ActiveWindowInfo {
+      process_name,
+      window_title,
+      available: true,
+    }
+  })
 }
 
 #[cfg(target_os = "macos")]
@@ -213,7 +226,8 @@ fn macos_focused_window_title(pid: i32) -> String {
 
     let title_cf: CFStringRef = title_val as CFStringRef;
     let title = CFString::wrap_under_create_rule(title_cf).to_string();
-
+    // Release the CFString we received (wrap_under_create_rule assumes create-rule).
+    // CFString::wrap_under_create_rule will take ownership; do not CFRelease(title_val) again.
     title
   }
 }

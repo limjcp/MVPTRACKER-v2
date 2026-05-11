@@ -5,7 +5,7 @@ import { useStore } from './store/useStore';
 import type { ActivityEntry } from './types';
 import { invalidateTrackingPrefsCache, loadTrackingPrefsFromDb } from './trackingPrefsCache';
 import { ACTIVITY_MERGE_GAP_MINUTES, titleMergeKey } from './utils/activityMerge';
-import { inferAppCategory, inferProductivityFromCategory } from './utils/appCategories';
+import { inferAppCategory, inferProductivityForActivityContext } from './utils/appCategories';
 import { inferSystemProjectName, resolveProjectIdForSystemName } from './utils/systemProjects';
 
 /** Extract http(s) URL from window title when present (browsers rarely expose real tab URL). */
@@ -23,7 +23,7 @@ export function sliceKey(app: string, title: string) {
 }
 
 function findResumableActivity(
-  titleKey: string,
+  mergeKey: string,
   activities: ActivityEntry[],
   now: Date
 ): ActivityEntry | undefined {
@@ -31,7 +31,7 @@ function findResumableActivity(
   let bestEnd = 0;
   for (const a of activities) {
     if (a.type !== 'automatic') continue;
-    if (titleMergeKey(a.windowTitle) !== titleKey) continue;
+    if (sliceKey(a.appName, a.windowTitle) !== mergeKey) continue;
     const end = parseISO(a.endTime);
     const gapMin = differenceInMinutes(now, end);
     if (gapMin >= 0 && gapMin < ACTIVITY_MERGE_GAP_MINUTES) {
@@ -165,7 +165,7 @@ export function useAutomaticTracking(enabled = true) {
         setIsTracking(true);
         setTrackingStatus('active');
 
-        const tKey = titleMergeKey(title);
+        const tKey = sliceKey(app, titleMergeKey(title));
         const nowIso = new Date().toISOString();
         const nowDate = new Date(nowIso);
         const url = urlFromWindowTitle(title);
@@ -186,7 +186,7 @@ export function useAutomaticTracking(enabled = true) {
             windowTitle: title,
             url: url ?? resume.url,
             category,
-            productivity: inferProductivityFromCategory(category),
+            productivity: inferProductivityForActivityContext(app, title, category),
           });
           return;
         }
@@ -206,7 +206,7 @@ export function useAutomaticTracking(enabled = true) {
                 windowTitle: title,
                 url: url ?? row.url,
                 category,
-                productivity: inferProductivityFromCategory(category),
+                productivity: inferProductivityForActivityContext(app, title, category),
               });
               return;
             }
@@ -232,7 +232,7 @@ export function useAutomaticTracking(enabled = true) {
           endTime: nowIso,
           duration: 0,
           category,
-          productivity: inferProductivityFromCategory(category),
+          productivity: inferProductivityForActivityContext(app, title, category),
           type: 'automatic',
           trackingSessionId: sessionId,
           ...(projectId ? { projectId } : {}),
