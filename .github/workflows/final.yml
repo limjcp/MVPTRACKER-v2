@@ -213,14 +213,20 @@ jobs:
 
       - name: Prevent Mac Archive Collisions and Expose Portable Windows
         run: |
-          find artifacts/macos-x64 -name "MVPTime.app.tar.gz" -exec mv {} {}_x64.tar.gz \;
-          find artifacts/macos-x64 -name "MVPTime.app.tar.gz.sig" -exec mv {} {}_x64.tar.gz.sig \;
+          # Rename mac updater archives + signatures in lockstep so each .sig and its
+          # .tar.gz keep matching names (merge-tauri-latest-json.cjs pairs them by
+          # stripping ".sig" from the signature path).
+          rename_mac() {
+            local dir="$1" suffix="$2"
+            find "$dir" -name "MVPTime.app.tar.gz" -exec bash -c \
+              'mv "$1" "$(dirname "$1")/MVPTime_'"$suffix"'.app.tar.gz"' _ {} \;
+            find "$dir" -name "MVPTime.app.tar.gz.sig" -exec bash -c \
+              'mv "$1" "$(dirname "$1")/MVPTime_'"$suffix"'.app.tar.gz.sig"' _ {} \;
+          }
 
-          find artifacts/macos-arm64 -name "MVPTime.app.tar.gz" -exec mv {} {}_aarch64.tar.gz \;
-          find artifacts/macos-arm64 -name "MVPTime.app.tar.gz.sig" -exec mv {} {}_aarch64.tar.gz.sig \;
-
-          find artifacts/macos-universal -name "MVPTime.app.tar.gz" -exec mv {} {}_universal.tar.gz \;
-          find artifacts/macos-universal -name "MVPTime.app.tar.gz.sig" -exec mv {} {}_universal.tar.gz.sig \;
+          rename_mac artifacts/macos-x64 x64
+          rename_mac artifacts/macos-arm64 aarch64
+          rename_mac artifacts/macos-universal universal
 
           # Expose Windows portable
           find artifacts/windows -name "mvptime.exe" -exec mv {} {}_0.1.2_portable.exe \;
