@@ -96,7 +96,7 @@ fn snapshot_macos_on_main_thread() -> ActiveWindowInfo {
   let q = Queue::main();
   // If we're already on main, `sync` is fine; otherwise it hops to the main queue.
   // We keep the critical section small and purely reads of foreground state.
-  q.exec_sync(|| {
+  q.sync(|| {
     let frontmost = unsafe {
       let ws = NSWorkspace::sharedWorkspace();
       ws.frontmostApplication()
