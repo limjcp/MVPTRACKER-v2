@@ -198,7 +198,8 @@ export default function Dashboard() {
         <StatCard
           label="Billable Hours"
           value={formatDuration(billableSecondsToday)}
-          subValue={`$${billableEstimateToday.toFixed(0)} est.`}
+          // subValue={`$${billableEstimateToday.toFixed(0)} est.`}
+          subValue={null as unknown as string}
           trend="up"
           icon={TrendingUp}
           color="amber"

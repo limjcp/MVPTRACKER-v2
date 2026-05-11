@@ -337,6 +337,11 @@ function derivedFrom(
   };
 }
 
+function effectiveNowIso(state: { trackingPaused: boolean; trackingPausedAtIso: string | null }): string {
+  if (state.trackingPaused && state.trackingPausedAtIso) return state.trackingPausedAtIso;
+  return new Date().toISOString();
+}
+
 interface AppState {
   currentView: ViewType;
   selectedDate: string;
@@ -401,6 +406,12 @@ interface AppState {
   setShowAddEntry: (show: boolean) => void;
   showAddProject: boolean;
   setShowAddProject: (show: boolean) => void;
+  /** Session-only gate: when true, automatic tracking + task check-ins are disabled. */
+  trackingPaused: boolean;
+  /** Timestamp captured when Pause was turned on; used to freeze timeline/stat growth. */
+  trackingPausedAtIso: string | null;
+  setTrackingPaused: (paused: boolean) => void;
+  toggleTrackingPaused: () => void;
   isTracking: boolean;
   trackingStatus: 'active' | 'idle' | 'away';
   currentApp: string;
@@ -464,8 +475,7 @@ export const useStore = create<AppState>((set, get) => ({
   setReviewProjectFilter: (reviewProjectFilter) => set({ reviewProjectFilter }),
   setView: (view) => set({ currentView: view }),
   setSelectedDate: (date) => {
-    const { activities, manualEntries, projects, blockTags, taskSegments, settings, lastAutomaticPollAt } =
-      get();
+    const { activities, manualEntries, projects, blockTags, taskSegments, settings, lastAutomaticPollAt } = get();
     set({
       selectedDate: date,
       ...derivedFrom(
@@ -475,7 +485,7 @@ export const useStore = create<AppState>((set, get) => ({
         projects,
         blockTags,
         taskSegments,
-        new Date().toISOString(),
+        effectiveNowIso(get()),
         settings.idleThreshold,
         lastAutomaticPollAt
       ),
@@ -497,7 +507,17 @@ export const useStore = create<AppState>((set, get) => ({
         calendarEvents: [],
         trackingSessionId: '',
         lastAutomaticPollAt: null,
-        ...derivedFrom(selectedDate, [], [], [], [], [], new Date().toISOString(), defaultSettings.idleThreshold, null),
+        ...derivedFrom(
+          selectedDate,
+          [],
+          [],
+          [],
+          [],
+          [],
+          effectiveNowIso(get()),
+          defaultSettings.idleThreshold,
+          null
+        ),
       });
       return;
     }
@@ -563,7 +583,7 @@ export const useStore = create<AppState>((set, get) => ({
         projects,
         blockTags,
         taskSegments,
-        new Date().toISOString(),
+        effectiveNowIso(get()),
         settings.idleThreshold,
         null
       ),
@@ -576,7 +596,17 @@ export const useStore = create<AppState>((set, get) => ({
       const projects = [...state.projects, project];
       return {
         projects,
-        ...derivedFrom(state.selectedDate, state.activities, state.manualEntries, projects, state.blockTags, state.taskSegments, new Date().toISOString(), state.settings.idleThreshold, state.lastAutomaticPollAt),
+        ...derivedFrom(
+          state.selectedDate,
+          state.activities,
+          state.manualEntries,
+          projects,
+          state.blockTags,
+          state.taskSegments,
+          effectiveNowIso(state),
+          state.settings.idleThreshold,
+          state.lastAutomaticPollAt
+        ),
       };
     });
     if (isTauriRuntime()) void invoke('db_upsert_project', { project: toProjectRow(project) });
@@ -588,7 +618,17 @@ export const useStore = create<AppState>((set, get) => ({
       if (updated && isTauriRuntime()) void invoke('db_upsert_project', { project: toProjectRow(updated) });
       return {
         projects,
-        ...derivedFrom(state.selectedDate, state.activities, state.manualEntries, projects, state.blockTags, state.taskSegments, new Date().toISOString(), state.settings.idleThreshold, state.lastAutomaticPollAt),
+        ...derivedFrom(
+          state.selectedDate,
+          state.activities,
+          state.manualEntries,
+          projects,
+          state.blockTags,
+          state.taskSegments,
+          effectiveNowIso(state),
+          state.settings.idleThreshold,
+          state.lastAutomaticPollAt
+        ),
       };
     }),
   deleteProject: (id) => {
@@ -596,7 +636,17 @@ export const useStore = create<AppState>((set, get) => ({
       const projects = state.projects.filter((p) => p.id !== id);
       return {
         projects,
-        ...derivedFrom(state.selectedDate, state.activities, state.manualEntries, projects, state.blockTags, state.taskSegments, new Date().toISOString(), state.settings.idleThreshold, state.lastAutomaticPollAt),
+        ...derivedFrom(
+          state.selectedDate,
+          state.activities,
+          state.manualEntries,
+          projects,
+          state.blockTags,
+          state.taskSegments,
+          effectiveNowIso(state),
+          state.settings.idleThreshold,
+          state.lastAutomaticPollAt
+        ),
       };
     });
     if (isTauriRuntime()) void invoke('db_delete_project', { id });
@@ -610,7 +660,17 @@ export const useStore = create<AppState>((set, get) => ({
       if (next && isTauriRuntime()) void invoke('db_upsert_activity', { activity: toActivityRow(next) });
       return {
         activities,
-        ...derivedFrom(state.selectedDate, activities, state.manualEntries, state.projects, state.blockTags, state.taskSegments, new Date().toISOString(), state.settings.idleThreshold, state.lastAutomaticPollAt),
+        ...derivedFrom(
+          state.selectedDate,
+          activities,
+          state.manualEntries,
+          state.projects,
+          state.blockTags,
+          state.taskSegments,
+          effectiveNowIso(state),
+          state.settings.idleThreshold,
+          state.lastAutomaticPollAt
+        ),
       };
     });
   },
@@ -622,7 +682,17 @@ export const useStore = create<AppState>((set, get) => ({
       if (isTauriRuntime()) void invoke('db_upsert_activity', { activity: toActivityRow(activity) });
       return {
         activities,
-        ...derivedFrom(state.selectedDate, activities, state.manualEntries, state.projects, state.blockTags, state.taskSegments, new Date().toISOString(), state.settings.idleThreshold, state.lastAutomaticPollAt),
+        ...derivedFrom(
+          state.selectedDate,
+          activities,
+          state.manualEntries,
+          state.projects,
+          state.blockTags,
+          state.taskSegments,
+          effectiveNowIso(state),
+          state.settings.idleThreshold,
+          state.lastAutomaticPollAt
+        ),
       };
     });
   },
@@ -633,7 +703,17 @@ export const useStore = create<AppState>((set, get) => ({
       if (next && isTauriRuntime()) void invoke('db_upsert_activity', { activity: toActivityRow(next) });
       return {
         activities,
-        ...derivedFrom(state.selectedDate, activities, state.manualEntries, state.projects, state.blockTags, state.taskSegments, new Date().toISOString(), state.settings.idleThreshold, state.lastAutomaticPollAt),
+        ...derivedFrom(
+          state.selectedDate,
+          activities,
+          state.manualEntries,
+          state.projects,
+          state.blockTags,
+          state.taskSegments,
+          effectiveNowIso(state),
+          state.settings.idleThreshold,
+          state.lastAutomaticPollAt
+        ),
       };
     });
   },
@@ -652,7 +732,17 @@ export const useStore = create<AppState>((set, get) => ({
       const activities = state.activities.filter((a) => !idSet.has(a.id));
       return {
         activities,
-        ...derivedFrom(state.selectedDate, activities, state.manualEntries, state.projects, state.blockTags, state.taskSegments, new Date().toISOString(), state.settings.idleThreshold, state.lastAutomaticPollAt),
+        ...derivedFrom(
+          state.selectedDate,
+          activities,
+          state.manualEntries,
+          state.projects,
+          state.blockTags,
+          state.taskSegments,
+          effectiveNowIso(state),
+          state.settings.idleThreshold,
+          state.lastAutomaticPollAt
+        ),
       };
     });
   },
@@ -664,7 +754,17 @@ export const useStore = create<AppState>((set, get) => ({
       if (isTauriRuntime()) void invoke('db_add_manual_entry', { entry: toManualEntryRow(entry) });
       return {
         manualEntries,
-        ...derivedFrom(state.selectedDate, state.activities, manualEntries, state.projects, state.blockTags, state.taskSegments, new Date().toISOString(), state.settings.idleThreshold, state.lastAutomaticPollAt),
+        ...derivedFrom(
+          state.selectedDate,
+          state.activities,
+          manualEntries,
+          state.projects,
+          state.blockTags,
+          state.taskSegments,
+          effectiveNowIso(state),
+          state.settings.idleThreshold,
+          state.lastAutomaticPollAt
+        ),
       };
     });
   },
@@ -675,7 +775,17 @@ export const useStore = create<AppState>((set, get) => ({
       if (next && isTauriRuntime()) void invoke('db_update_manual_entry', { entry: toManualEntryRow(next) });
       return {
         manualEntries,
-        ...derivedFrom(state.selectedDate, state.activities, manualEntries, state.projects, state.blockTags, state.taskSegments, new Date().toISOString(), state.settings.idleThreshold, state.lastAutomaticPollAt),
+        ...derivedFrom(
+          state.selectedDate,
+          state.activities,
+          manualEntries,
+          state.projects,
+          state.blockTags,
+          state.taskSegments,
+          effectiveNowIso(state),
+          state.settings.idleThreshold,
+          state.lastAutomaticPollAt
+        ),
       };
     });
   },
@@ -694,7 +804,17 @@ export const useStore = create<AppState>((set, get) => ({
       const manualEntries = state.manualEntries.filter((e) => !idSet.has(e.id));
       return {
         manualEntries,
-        ...derivedFrom(state.selectedDate, state.activities, manualEntries, state.projects, state.blockTags, state.taskSegments, new Date().toISOString(), state.settings.idleThreshold, state.lastAutomaticPollAt),
+        ...derivedFrom(
+          state.selectedDate,
+          state.activities,
+          manualEntries,
+          state.projects,
+          state.blockTags,
+          state.taskSegments,
+          effectiveNowIso(state),
+          state.settings.idleThreshold,
+          state.lastAutomaticPollAt
+        ),
       };
     });
   },
@@ -729,7 +849,17 @@ export const useStore = create<AppState>((set, get) => ({
       return {
         corporations,
         blockTags,
-        ...derivedFrom(state.selectedDate, state.activities, state.manualEntries, state.projects, blockTags, state.taskSegments, new Date().toISOString(), state.settings.idleThreshold, state.lastAutomaticPollAt),
+        ...derivedFrom(
+          state.selectedDate,
+          state.activities,
+          state.manualEntries,
+          state.projects,
+          blockTags,
+          state.taskSegments,
+          effectiveNowIso(state),
+          state.settings.idleThreshold,
+          state.lastAutomaticPollAt
+        ),
       };
     });
     if (isTauriRuntime()) void invoke('db_delete_corporation', { id });
@@ -767,7 +897,17 @@ export const useStore = create<AppState>((set, get) => ({
       if (isTauriRuntime()) void invoke('db_set_block_tag', { tag: toBlockTagRow(merged) });
       return {
         blockTags,
-        ...derivedFrom(state.selectedDate, state.activities, state.manualEntries, state.projects, blockTags, state.taskSegments, new Date().toISOString(), state.settings.idleThreshold, state.lastAutomaticPollAt),
+        ...derivedFrom(
+          state.selectedDate,
+          state.activities,
+          state.manualEntries,
+          state.projects,
+          blockTags,
+          state.taskSegments,
+          effectiveNowIso(state),
+          state.settings.idleThreshold,
+          state.lastAutomaticPollAt
+        ),
       };
     });
   },
@@ -777,7 +917,17 @@ export const useStore = create<AppState>((set, get) => ({
       if (isTauriRuntime()) void invoke('db_clear_block_tag', { id });
       return {
         blockTags,
-        ...derivedFrom(state.selectedDate, state.activities, state.manualEntries, state.projects, blockTags, state.taskSegments, new Date().toISOString(), state.settings.idleThreshold, state.lastAutomaticPollAt),
+        ...derivedFrom(
+          state.selectedDate,
+          state.activities,
+          state.manualEntries,
+          state.projects,
+          blockTags,
+          state.taskSegments,
+          effectiveNowIso(state),
+          state.settings.idleThreshold,
+          state.lastAutomaticPollAt
+        ),
       };
     });
   },
@@ -792,7 +942,7 @@ export const useStore = create<AppState>((set, get) => ({
         state.projects,
         state.blockTags,
         state.taskSegments,
-        new Date().toISOString(),
+        effectiveNowIso(state),
         state.settings.idleThreshold,
         state.lastAutomaticPollAt
       ),
@@ -819,7 +969,7 @@ export const useStore = create<AppState>((set, get) => ({
         state.projects,
         blockTags,
         taskSegments,
-        new Date().toISOString(),
+        effectiveNowIso(state),
         state.settings.idleThreshold,
         state.lastAutomaticPollAt
       ),
@@ -873,7 +1023,7 @@ export const useStore = create<AppState>((set, get) => ({
           state.projects,
           state.blockTags,
           state.taskSegments,
-          new Date().toISOString(),
+          effectiveNowIso(state),
           next.idleThreshold,
           state.lastAutomaticPollAt
         ),
@@ -886,6 +1036,30 @@ export const useStore = create<AppState>((set, get) => ({
   setShowAddEntry: (show) => set({ showAddEntry: show }),
   showAddProject: false,
   setShowAddProject: (show) => set({ showAddProject: show }),
+  trackingPaused: false,
+  trackingPausedAtIso: null,
+  setTrackingPaused: (paused) => {
+    const nowIso = new Date().toISOString();
+    set(() => ({
+      trackingPaused: paused,
+      trackingPausedAtIso: paused ? nowIso : null,
+    }));
+    if (!isTauriRuntime()) return;
+    if (paused) {
+      void invoke('db_close_open_task_segment', { nowIso }).then(() => {
+        void get().reloadTaskSegments();
+      });
+      return;
+    }
+    const newId = crypto.randomUUID();
+    void invoke('db_resume_task_segment_after_pause', { newId, nowIso }).then(() => {
+      void get().reloadTaskSegments();
+    });
+  },
+  toggleTrackingPaused: () => {
+    const nextPaused = !get().trackingPaused;
+    get().setTrackingPaused(nextPaused);
+  },
   isTracking: false,
   trackingStatus: 'idle',
   currentApp: '',

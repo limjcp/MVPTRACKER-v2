@@ -11,6 +11,7 @@ import { useStore } from './store/useStore';
  */
 export default function StaffBackgroundServices() {
   const { hydrate } = useStore();
+  const trackingPaused = useStore((s) => s.trackingPaused);
 
   // The check-in window route is `/staff?checkin=1`. When it is open, we avoid spawning another.
   const isCheckIn =
@@ -18,14 +19,15 @@ export default function StaffBackgroundServices() {
     new URLSearchParams(window.location.search).has('checkin');
 
   const enabled = !isCheckIn;
+  const trackingFeaturesEnabled = enabled && !trackingPaused;
 
   useEffect(() => {
     if (isCheckIn) return;
     void hydrate();
   }, [hydrate, isCheckIn]);
 
-  useTaskCheckInScheduler(enabled);
-  useAutomaticTracking(enabled);
+  useTaskCheckInScheduler(trackingFeaturesEnabled);
+  useAutomaticTracking(trackingFeaturesEnabled);
   useSupabaseSync(enabled);
   useAppUpdater(enabled);
 

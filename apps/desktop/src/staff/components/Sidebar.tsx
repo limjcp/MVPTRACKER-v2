@@ -13,6 +13,8 @@ import {
   Timer,
   Plus,
   Users,
+  Pause,
+  Play,
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { cn, PROJECT_COLORS } from '../utils/cn';
@@ -47,6 +49,8 @@ export default function Sidebar() {
     triggerSync,
     trackingStatus,
     currentApp,
+    trackingPaused,
+    toggleTrackingPaused,
   } = useStore();
 
   const privateProjects = projects.filter((p) => p.scope !== 'team');
@@ -89,23 +93,40 @@ export default function Sidebar() {
           <div
             className={cn(
               'w-2 h-2 rounded-full flex-shrink-0',
-              trackingStatus === 'active'
-                ? 'bg-emerald-400 animate-pulse'
-                : trackingStatus === 'idle'
-                  ? 'bg-amber-400'
-                  : 'bg-red-400'
+              trackingPaused
+                ? 'bg-white/30'
+                : trackingStatus === 'active'
+                  ? 'bg-emerald-400 animate-pulse'
+                  : trackingStatus === 'idle'
+                    ? 'bg-amber-400'
+                    : 'bg-red-400'
             )}
           />
           <div className="flex-1 min-w-0">
             <p className="text-white/70 text-[11px] font-medium">
-              {trackingStatus === 'active'
-                ? 'Tracking Active'
-                : trackingStatus === 'idle'
-                  ? 'You appear idle'
-                  : 'Away from Mac'}
+              {trackingPaused
+                ? 'Tracking Paused'
+                : trackingStatus === 'active'
+                  ? 'Tracking Active'
+                  : trackingStatus === 'idle'
+                    ? 'You appear idle'
+                    : 'Away from Mac'}
             </p>
             <p className="text-white/30 text-[10px] truncate">{currentApp || 'No foreground app'}</p>
           </div>
+          <button
+            type="button"
+            onClick={toggleTrackingPaused}
+            className={cn(
+              'shrink-0 w-7 h-7 rounded-lg border flex items-center justify-center transition-colors',
+              trackingPaused
+                ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/15'
+                : 'border-white/[0.10] bg-white/[0.03] text-white/60 hover:bg-white/[0.07] hover:text-white/80'
+            )}
+            title={trackingPaused ? 'Resume tracking' : 'Pause tracking'}
+          >
+            {trackingPaused ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
+          </button>
         </div>
       </div>
 

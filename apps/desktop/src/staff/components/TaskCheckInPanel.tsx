@@ -6,6 +6,7 @@ import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { parseISO } from 'date-fns';
 import { ArrowLeft } from 'lucide-react';
 import { blockSegmentTagId } from '../store/derive';
+import { LS_TASK_CHECKIN_SNOOZE_UNTIL } from '../useTaskCheckInScheduler';
 import {
   OTHER_TASK_LABEL,
   OTHER_TASK_SLUG,
@@ -140,6 +141,17 @@ function safeGetCurrentWindow() {
   }
 }
 
+const HEALTH_TIPS = [
+  'Stand up for 30 seconds.',
+  'Take one deep breath.',
+  'Relax your shoulders.',
+  'Stretch your neck gently.',
+  'Blink and look far away for 20 seconds.',
+  'Sip some water.',
+  'Unclench your jaw.',
+  'Do a quick wrist stretch.',
+];
+
 export default function TaskCheckInPanel() {
   const defaultNo = useMemo(() => readDefaultNo(), []);
   const [step, setStep] = useState<Step>(() => (defaultNo ? 'newTask' : 'ask'));
@@ -208,6 +220,10 @@ export default function TaskCheckInPanel() {
   );
 
   const didInitDefaultNo = useRef(false);
+  const healthTip = useMemo(
+    () => HEALTH_TIPS[Math.floor(Math.random() * HEALTH_TIPS.length)] ?? 'Stand up and stretch.',
+    []
+  );
   const { headline, detail } = useMemo(
     () => buildStillOnLines(openSegment, openTag, corpsById),
     [openSegment, openTag, corpsById]
@@ -253,6 +269,29 @@ export default function TaskCheckInPanel() {
     setBusy(true);
     setError(null);
     try {
+      await invoke('db_task_checkin_yes', { nowIso: new Date().toISOString() });
+      await notifyMain();
+      await closeWindow();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onSnooze30 = async () => {
+    if (!isTauri()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      try {
+        localStorage.setItem(
+          LS_TASK_CHECKIN_SNOOZE_UNTIL,
+          String(Date.now() + 30 * 60 * 1000)
+        );
+      } catch {
+        // ignore
+      }
       await invoke('db_task_checkin_yes', { nowIso: new Date().toISOString() });
       await notifyMain();
       await closeWindow();
@@ -367,6 +406,7 @@ export default function TaskCheckInPanel() {
           <div className="flex flex-col flex-1 min-h-0 justify-center gap-3">
             <h1 className="text-[13px] font-semibold text-white leading-snug">{headline}</h1>
             {detail ? <p className="text-[10px] text-white/40 leading-snug">{detail}</p> : null}
+            <p className="text-[10px] text-white/35 leading-snug">{healthTip}</p>
             <p className="text-[11px] text-white/45 leading-snug">
               <span className="text-white/65">Yes</span> — same block.{' '}
               <span className="text-white/65">No</span> — new block + tags.
@@ -380,6 +420,14 @@ export default function TaskCheckInPanel() {
                 className="flex-1 rounded-lg bg-violet-500/90 py-2 text-[12px] font-medium text-white hover:bg-violet-500 disabled:opacity-40"
               >
                 Yes, same task
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void onSnooze30()}
+                className="flex-1 rounded-lg border border-white/[0.12] bg-white/[0.03] py-2 text-[12px] font-medium text-white/80 hover:bg-white/[0.06] disabled:opacity-40"
+              >
+                Snooze for 30mins
               </button>
               <button
                 type="button"

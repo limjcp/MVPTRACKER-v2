@@ -12,6 +12,7 @@ struct DbPath(PathBuf);
 
 const TRAY_MENU_TOGGLE: &str = "toggle_main";
 const TRAY_MENU_QUIT: &str = "quit";
+const TRAY_ICON: tauri::image::Image<'_> = tauri::include_image!("icons/32x32.png");
 
 fn close_open_task_segment_best_effort(app: &tauri::AppHandle) {
   let now_iso = Utc::now().to_rfc3339();
@@ -69,6 +70,7 @@ fn build_tray(app: &tauri::AppHandle) -> Result<(), tauri::Error> {
   let menu = Menu::with_items(app, &[&toggle, &quit])?;
 
   TrayIconBuilder::new()
+    .icon(TRAY_ICON.clone())
     .menu(&menu)
     .on_menu_event(|app, event| match event.id().as_ref() {
       TRAY_MENU_TOGGLE => toggle_main_window(app),
@@ -146,6 +148,8 @@ pub fn run() {
       db_clear_block_tag,
       db_list_task_segments,
       db_ensure_open_task_segment,
+      db_close_open_task_segment,
+      db_resume_task_segment_after_pause,
       db_task_checkin_yes,
       db_task_checkin_no,
     ])
@@ -400,6 +404,37 @@ fn db_ensure_open_task_segment(
   let max_gap_seconds = max_gap_seconds.unwrap_or(5 * 60);
   mvptime_core::sqlite::ensure_open_task_segment(&conn, &new_id, &now_iso, max_gap_seconds)
     .map_err(|e| e.to_string())
+}
+
+/// Closes the currently-open task segment at `now_iso` (best-effort; no-op if none).
+#[tauri::command]
+fn db_close_open_task_segment(db: tauri::State<'_, DbPath>, now_iso: String) -> Result<(), String> {
+  let conn = mvptime_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
+  let open = mvptime_core::sqlite::get_open_task_segment(&conn).map_err(|e| e.to_string())?;
+  if let Some(s) = open {
+    mvptime_core::sqlite::close_task_segment(&conn, &s.id, &now_iso).map_err(|e| e.to_string())?;
+  }
+  Ok(())
+}
+
+/// Ends any open segment at `now_iso` and starts a new one at `now_iso`, inheriting tags.
+#[tauri::command]
+fn db_resume_task_segment_after_pause(
+  db: tauri::State<'_, DbPath>,
+  new_id: String,
+  now_iso: String,
+) -> Result<mvptime_core::sqlite::TaskSegmentRow, String> {
+  let conn = mvptime_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
+  mvptime_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
+
+  let open = mvptime_core::sqlite::get_open_task_segment(&conn).map_err(|e| e.to_string())?;
+  if let Some(s) = open {
+    mvptime_core::sqlite::close_task_segment(&conn, &s.id, &now_iso).map_err(|e| e.to_string())?;
+  }
+
+  // Create a new open segment at `now_iso`. Tags are inherited from the most recent closed segment.
+  mvptime_core::sqlite::ensure_open_task_segment(&conn, &new_id, &now_iso, 0).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

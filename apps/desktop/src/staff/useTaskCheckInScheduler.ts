@@ -12,6 +12,7 @@ const CHECKIN_MS = 15 * 60 * 1000;
 const TICK_MS = 60 * 1000;
 const LS_DAILY_CHECKIN_SHOWN_DAY = 'mvptime:lastDailyCheckinShownDay';
 const LS_DAILY_CHECKIN_SHOWN_DAY_LEGACY = 'mvptracker:lastDailyCheckinShownDay';
+export const LS_TASK_CHECKIN_SNOOZE_UNTIL = 'mvptime:taskCheckinSnoozeUntil';
 
 /** Match TaskCheckInPanel compact layout for placement math. */
 export const TASK_CHECKIN_WINDOW_WIDTH = 360;
@@ -126,6 +127,13 @@ function safeSetLocalStorage(key: string, value: string): void {
   }
 }
 
+function snoozeUntilMs(): number {
+  const raw = safeGetLocalStorage(LS_TASK_CHECKIN_SNOOZE_UNTIL);
+  if (!raw) return 0;
+  const n = Number(raw);
+  return Number.isFinite(n) ? Math.max(0, n) : 0;
+}
+
 function localDayKey(d: Date): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
@@ -223,7 +231,8 @@ export function useTaskCheckInScheduler(enabled: boolean) {
     const tick = () => {
       const segments = useStore.getState().taskSegments;
       if (segments.length === 0) return;
-      if (Date.now() >= deadlineMs(segments)) {
+      const dueAt = Math.max(deadlineMs(segments), snoozeUntilMs());
+      if (Date.now() >= dueAt) {
         void openOrFocusCheckInWindow();
       }
     };
