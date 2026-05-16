@@ -1,20 +1,13 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import {
-  LayoutDashboard,
-  Shield,
-  Users,
-  Settings,
-  Timer,
-} from 'lucide-react';
+import { LayoutDashboard, Users, Timer, FileText } from 'lucide-react';
 import { cn } from '../utils/cn';
 import type { AdminView } from '../types/adminView';
 
 const NAV_ITEMS: { id: AdminView; label: string; icon: React.ElementType }[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'users', label: 'Users', icon: Users },
-  { id: 'security', label: 'Security', icon: Shield },
-  { id: 'settings', label: 'Settings', icon: Settings },
+  { id: 'reports', label: 'Reports', icon: FileText },
 ];
 
 export default function Sidebar({

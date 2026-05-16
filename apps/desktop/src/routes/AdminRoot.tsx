@@ -1,9 +1,8 @@
 import { useEffect, useState } from 'react';
 import Sidebar from '../admin/components/Sidebar';
-import Settings from '../admin/components/Settings';
 import Overview from '../admin/components/Overview';
 import Users from '../admin/components/Users';
-import Security from '../admin/components/Security';
+import AdminReports from '../admin/components/AdminReports';
 import { useAdminSettingsStore } from '../admin/store/useAdminSettingsStore';
 import type { AdminView } from '../admin/types/adminView';
 import CurrentUserMenu from '../components/CurrentUserMenu';
@@ -40,10 +39,8 @@ export default function AdminRoot() {
             <Overview />
           ) : currentView === 'users' ? (
             <Users />
-          ) : currentView === 'security' ? (
-            <Security />
-          ) : currentView === 'settings' ? (
-            <Settings />
+          ) : currentView === 'reports' ? (
+            <AdminReports />
           ) : (
             <Overview />
           )}

@@ -1,1 +1,1 @@
-export type AdminView = 'overview' | 'users' | 'security' | 'settings';
+export type AdminView = 'overview' | 'users' | 'reports';

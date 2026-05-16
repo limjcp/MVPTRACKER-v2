@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { formatDistanceToNowStrict } from 'date-fns';
+import { format, formatDistanceToNowStrict, subDays } from 'date-fns';
 import {
   Area,
   AreaChart,
@@ -62,24 +62,19 @@ function formatHrMinFromSeconds(sec: number): string {
   return parts.join(' ');
 }
 
-function dayStr(): string {
-  return new Date().toISOString().slice(0, 10);
+/** Local calendar day — matches staff sync (`computeDailyStats`, `localDayKey`) and Postgres date strings. */
+function rangeToStartDay(r: RangeKey, now: Date): string | null {
+  if (r === 'today') return format(now, 'yyyy-MM-dd');
+  if (r === '7d') return format(subDays(now, 6), 'yyyy-MM-dd');
+  if (r === '30d') return format(subDays(now, 29), 'yyyy-MM-dd');
+  return null;
 }
 
-function rangeToStartDay(r: RangeKey): string | null {
-  const today = new Date();
-  if (r === 'today') return dayStr();
-  if (r === '7d') {
-    const d = new Date(today);
-    d.setDate(d.getDate() - 6);
-    return d.toISOString().slice(0, 10);
-  }
-  if (r === '30d') {
-    const d = new Date(today);
-    d.setDate(d.getDate() - 29);
-    return d.toISOString().slice(0, 10);
-  }
-  return null;
+function rangeTotalsStatLabel(r: RangeKey): string {
+  if (r === 'today') return 'Today';
+  if (r === '7d') return 'Last 7 days';
+  if (r === '30d') return 'Last 30 days';
+  return 'All time';
 }
 
 function isOnline(lastHeartbeatIso: string, windowMinutes = 2): boolean {
@@ -90,6 +85,16 @@ function isOnline(lastHeartbeatIso: string, windowMinutes = 2): boolean {
 function safeNum(n: any): number {
   const x = Number(n);
   return Number.isFinite(x) ? x : 0;
+}
+
+/** Compare rollups using YYYY-MM-DD only (Supabase may return `date` as ISO with `T…`). */
+function dayKeyFromRow(day: string): string {
+  return String(day || '').split('T')[0] ?? '';
+}
+
+/** Stable map key for UUIDs from Postgres/JSON (case may vary). */
+function uidKey(userId: string): string {
+  return String(userId || '').toLowerCase();
 }
 
 export default function Overview() {
@@ -108,8 +113,13 @@ export default function Overview() {
   const [taskBlocksDaily, setTaskBlocksDaily] = useState<TaskBlockDailyRow[]>([]);
   const [currentStatus, setCurrentStatus] = useState<CurrentStatusRow[]>([]);
 
-  const today = useMemo(() => dayStr(), []);
-  const startDay = useMemo(() => rangeToStartDay(range), [range]);
+  const { today, startDay } = useMemo(() => {
+    const now = new Date();
+    return {
+      today: format(now, 'yyyy-MM-dd'),
+      startDay: rangeToStartDay(range, now),
+    };
+  }, [range, refreshKey]);
 
   useEffect(() => {
     const client = supabase;
@@ -204,29 +214,96 @@ export default function Overview() {
   const presenceById = useMemo(() => new Map(presence.map((p) => [p.user_id, p])), [presence]);
   const statusById = useMemo(() => new Map(currentStatus.map((s) => [s.user_id, s])), [currentStatus]);
 
-  const todaySecondsByUser = useMemo(() => {
-    const m = new Map<string, DailyRow>();
-    for (const r of daily) {
-      if (r.day === today) m.set(r.user_id, r);
-    }
-    return m;
-  }, [daily, today]);
-
   const dayInSelectedRange = useMemo(() => {
     return (day: string) => {
       if (startDay == null) return true;
-      return day >= startDay && day <= today;
+      const k = dayKeyFromRow(day);
+      return k >= startDay && k <= today;
     };
   }, [startDay, today]);
+
+  /**
+   * Prefer `user_daily_stats` for the three headline metrics. If those rows are missing or all zero
+   * (legacy data, failed sync slice, etc.) fall back to project rollups — treat **Browsing** as idle —
+   * then to summed task-block seconds so the cards match Top blocks / Projects.
+   */
+  const staffSummaryTotalsByUser = useMemo(() => {
+    type Totals = { total_seconds: number; productive_seconds: number; idle_seconds: number };
+    const z = (): Totals => ({ total_seconds: 0, productive_seconds: 0, idle_seconds: 0 });
+
+    const fromDaily = new Map<string, Totals>();
+    for (const r of daily) {
+      if (!dayInSelectedRange(r.day)) continue;
+      const uid = uidKey(r.user_id);
+      const cur = fromDaily.get(uid) ?? z();
+      cur.total_seconds += safeNum(r.total_seconds);
+      cur.productive_seconds += safeNum(r.productive_seconds);
+      cur.idle_seconds += safeNum(r.idle_seconds);
+      fromDaily.set(uid, cur);
+    }
+
+    const projTotalByUser = new Map<string, number>();
+    const browsingByUser = new Map<string, number>();
+    for (const r of projectsDaily) {
+      if (!dayInSelectedRange(r.day)) continue;
+      const uid = uidKey(r.user_id);
+      const sec = safeNum(r.seconds);
+      projTotalByUser.set(uid, (projTotalByUser.get(uid) ?? 0) + sec);
+      if (String(r.project_name || '').trim().toLowerCase() === 'browsing') {
+        browsingByUser.set(uid, (browsingByUser.get(uid) ?? 0) + sec);
+      }
+    }
+
+    const blockSumByUser = new Map<string, number>();
+    for (const r of taskBlocksDaily) {
+      if (!dayInSelectedRange(r.day)) continue;
+      const uid = uidKey(r.user_id);
+      blockSumByUser.set(uid, (blockSumByUser.get(uid) ?? 0) + safeNum(r.seconds));
+    }
+
+    const allUids = new Set<string>([...fromDaily.keys(), ...projTotalByUser.keys(), ...blockSumByUser.keys()]);
+    const out = new Map<string, Totals>();
+    for (const uid of allUids) {
+      const cur = fromDaily.get(uid) ?? z();
+      const hasDaily =
+        cur.total_seconds > 0 || cur.productive_seconds > 0 || cur.idle_seconds > 0;
+      if (hasDaily) {
+        out.set(uid, cur);
+        continue;
+      }
+      const pt = projTotalByUser.get(uid) ?? 0;
+      const br = browsingByUser.get(uid) ?? 0;
+      if (pt > 0) {
+        out.set(uid, {
+          total_seconds: pt,
+          productive_seconds: Math.max(0, pt - br),
+          idle_seconds: br,
+        });
+        continue;
+      }
+      const bs = blockSumByUser.get(uid) ?? 0;
+      if (bs > 0) {
+        out.set(uid, {
+          total_seconds: bs,
+          productive_seconds: bs,
+          idle_seconds: 0,
+        });
+        continue;
+      }
+      out.set(uid, cur);
+    }
+    return out;
+  }, [daily, projectsDaily, taskBlocksDaily, dayInSelectedRange]);
 
   const topBlocksByUser = useMemo(() => {
     const m = new Map<string, Map<string, number>>();
     for (const r of taskBlocksDaily) {
       if (!dayInSelectedRange(r.day)) continue;
-      const inner = m.get(r.user_id) ?? new Map<string, number>();
+      const uid = uidKey(r.user_id);
+      const inner = m.get(uid) ?? new Map<string, number>();
       const k = r.label || 'Untagged task block';
       inner.set(k, (inner.get(k) ?? 0) + safeNum(r.seconds));
-      m.set(r.user_id, inner);
+      m.set(uid, inner);
     }
     const out = new Map<string, Array<{ label: string; seconds: number }>>();
     for (const [uid, inner] of m) {
@@ -243,10 +320,11 @@ export default function Overview() {
     const m = new Map<string, Map<string, number>>();
     for (const r of projectsDaily) {
       if (!dayInSelectedRange(r.day)) continue;
-      const inner = m.get(r.user_id) ?? new Map<string, number>();
+      const uid = uidKey(r.user_id);
+      const inner = m.get(uid) ?? new Map<string, number>();
       const k = r.project_name || 'Unknown';
       inner.set(k, (inner.get(k) ?? 0) + safeNum(r.seconds));
-      m.set(r.user_id, inner);
+      m.set(uid, inner);
     }
     const out = new Map<string, Array<{ name: string; seconds: number }>>();
     for (const [uid, inner] of m) {
@@ -405,7 +483,7 @@ export default function Overview() {
         <div className="px-4 py-3 border-b border-white/[0.06]">
           <p className="text-white/70 text-sm font-semibold">Staff</p>
           <p className="text-white/30 text-xs mt-0.5">
-            Today totals and status · Top blocks and projects sum time in the selected range ({range === 'today' ? 'today' : range === 'all' ? 'all synced days' : `${range}`}).
+            Totals, top blocks, and projects use the selected range ({range === 'today' ? 'today' : range === 'all' ? 'all synced days' : `${range}`}). Presence and “last seen” are live.
           </p>
         </div>
 
@@ -421,22 +499,23 @@ export default function Overview() {
               const seen = pres?.last_heartbeat_at
                 ? `${formatDistanceToNowStrict(new Date(pres.last_heartbeat_at))} ago`
                 : 'never';
-              const d = todaySecondsByUser.get(u.user_id);
-              const todayFmt = formatHrMinFromSeconds(safeNum(d?.total_seconds ?? 0));
+              const sid = uidKey(u.user_id);
+              const d = staffSummaryTotalsByUser.get(sid);
+              const totalFmt = formatHrMinFromSeconds(safeNum(d?.total_seconds ?? 0));
               const prodFmt = formatHrMinFromSeconds(safeNum(d?.productive_seconds ?? 0));
               const idleFmt = formatHrMinFromSeconds(safeNum(d?.idle_seconds ?? 0));
 
-              const userTopBlocks = topBlocksByUser.get(u.user_id) ?? [];
+              const userTopBlocks = topBlocksByUser.get(sid) ?? [];
 
-              const proj = topProjectsByUser.get(u.user_id) ?? [];
+              const proj = topProjectsByUser.get(sid) ?? [];
               const taskLabel = status?.current_task_label ?? null;
 
               return (
                 <div key={u.user_id} className="px-4 py-4">
-                  <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
-                    <div className="flex items-start gap-3 min-w-0 xl:w-[320px]">
-                      <div className={cn('mt-1 w-2.5 h-2.5 rounded-full', online ? 'bg-emerald-400' : 'bg-white/20')} />
-                      <div className="min-w-0">
+                  <div className="flex flex-col gap-3 min-w-0">
+                    <div className="flex items-start gap-3 min-w-0">
+                      <div className={cn('mt-1 w-2.5 h-2.5 rounded-full shrink-0', online ? 'bg-emerald-400' : 'bg-white/20')} />
+                      <div className="min-w-0 flex-1">
                         <button
                           type="button"
                           onClick={() => setStaffDashboardUserId(u.user_id)}
@@ -455,13 +534,13 @@ export default function Overview() {
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-3 gap-2 xl:flex-1">
-                      <Stat label="Today" value={todayFmt} />
+                    <div className="grid grid-cols-3 gap-2 min-w-0">
+                      <Stat label={rangeTotalsStatLabel(range)} value={totalFmt} />
                       <Stat label="Productive" value={prodFmt} />
                       <Stat label="Idle/AFK" value={idleFmt} />
                     </div>
 
-                    <div className="grid grid-cols-2 gap-2 xl:w-[420px]">
+                    <div className="grid grid-cols-2 gap-2 min-w-0">
                       <MiniList
                         title="Top blocks"
                         items={userTopBlocks.map((a) => ({

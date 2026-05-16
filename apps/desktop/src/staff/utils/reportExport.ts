@@ -458,14 +458,14 @@ export async function exportReportPdf(
 
 export function buildTimesheetPrintHtml(
   filteredStats: DailyStats[],
-  activities: ActivityEntry[],
-  manualEntries: ManualEntry[],
-  projects: Project[],
+  _activities: ActivityEntry[],
+  _manualEntries: ManualEntry[],
+  _projects: Project[],
   settings: AppSettings,
   window: { startDate: string; endDate: string }
 ): string {
-  const items = buildLineItems(activities, manualEntries, window.startDate, window.endDate, projects);
   const totalSec = filteredStats.reduce((s, d) => s + d.totalTime, 0);
+  const totalProductiveSec = filteredStats.reduce((s, d) => s + d.productiveTime, 0);
   const rate = settings.defaultHourlyRate ?? 150;
   const currency = settings.currency ?? 'USD';
   const est = ((totalSec / 3600) * rate).toFixed(2);
@@ -477,12 +477,7 @@ export function buildTimesheetPrintHtml(
     )
     .join('');
 
-  const lineRows = items
-    .map(
-      (r) =>
-        `<tr><td>${escapeHtml(r.date)}</td><td>${escapeHtml(r.kind)}</td><td>${escapeHtml(r.appOrSource)}</td><td>${escapeHtml(r.detail)}</td><td>${escapeHtml(formatDuration(r.durationSeconds))}</td><td>${escapeHtml(r.projectName)}</td></tr>`
-    )
-    .join('');
+  const totalRow = `<tr><td><strong>${escapeHtml('Total')}</strong></td><td><strong>${escapeHtml(formatDuration(totalSec))}</strong></td><td><strong>${escapeHtml(formatDuration(totalProductiveSec))}</strong></td><td>—</td></tr>`;
 
   return `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>Print timesheet</title>
 <style>
@@ -490,14 +485,13 @@ body{font-family:system-ui,sans-serif;margin:16px;color:#111}
 table{border-collapse:collapse;width:100%;margin-top:12px;font-size:12px}
 th,td{border:1px solid #999;padding:6px;text-align:left}
 th{background:#eee}
+tfoot td{background:#f3f4f6;font-weight:600}
 h1{font-size:18px}
 .meta{color:#444;font-size:12px;margin:8px 0}
 @media print{body{margin:0}}
 </style></head><body>
 <h1>Daily timesheet</h1>
 <p class="meta">${escapeHtml(window.startDate)} to ${escapeHtml(window.endDate)} · Est. ${escapeHtml(currency)} ${escapeHtml(est)} @ ${rate}/hr</p>
-<table><thead><tr><th>Date</th><th>Total</th><th>Productive</th><th>Score</th></tr></thead><tbody>${dailyRows}</tbody></table>
-<h2 style="margin-top:20px;font-size:14px">Line items</h2>
-<table><thead><tr><th>Date</th><th>Kind</th><th>Source</th><th>Detail</th><th>Duration</th><th>Project</th></tr></thead><tbody>${lineRows || '<tr><td colspan="6">No rows</td></tr>'}</tbody></table>
+<table><thead><tr><th>Date</th><th>Total</th><th>Productive</th><th>Score</th></tr></thead><tbody>${dailyRows}</tbody><tfoot>${totalRow}</tfoot></table>
 </body></html>`;
 }
