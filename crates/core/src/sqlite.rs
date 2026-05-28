@@ -931,7 +931,7 @@ mod tests {
     upsert_task_segment(&conn, &old).unwrap();
 
     let now = "2026-04-28T10:00:00+00:00";
-    let created = ensure_open_task_segment(&conn, "new", now, 5 * 60).unwrap();
+    let created = ensure_open_task_segment(&conn, "new", now, 15 * 60).unwrap();
     assert_eq!(created.id, "new");
     assert_eq!(created.start_time, now);
     assert!(created.end_time.is_none());
@@ -947,8 +947,8 @@ mod tests {
     let end_time: Option<String> = stmt.query_row(params!["old"], |r| r.get(0)).unwrap();
     assert_eq!(
       end_time.as_deref(),
-      Some("2026-04-27T10:10:00+00:00"),
-      "expected old segment end_time to be capped at last_prompt_at + 5 minutes"
+      Some("2026-04-27T10:20:00+00:00"),
+      "expected old segment end_time to be capped at last_prompt_at + 15 minutes"
     );
   }
 
@@ -967,8 +967,8 @@ mod tests {
     };
     upsert_task_segment(&conn, &open).unwrap();
 
-    let now = "2026-04-28T10:05:00+00:00";
-    let kept = ensure_open_task_segment(&conn, "new", now, 5 * 60).unwrap();
+    let now = "2026-04-28T10:14:30+00:00";
+    let kept = ensure_open_task_segment(&conn, "new", now, 15 * 60).unwrap();
     assert_eq!(kept.id, "old");
     assert!(kept.end_time.is_none());
   }
@@ -1015,7 +1015,7 @@ mod tests {
     .unwrap();
 
     let now = "2026-04-28T10:00:00+00:00";
-    ensure_open_task_segment(&conn, "new-split", now, 5 * 60).unwrap();
+    ensure_open_task_segment(&conn, "new-split", now, 15 * 60).unwrap();
 
     let new_tag = get_block_tag_for_segment(&conn, "new-split")
       .unwrap()
@@ -1079,7 +1079,7 @@ mod tests {
     // Deliberately no block_tags row for stale-open
 
     let now = "2026-04-28T10:00:00+00:00";
-    ensure_open_task_segment(&conn, "after-reopen", now, 5 * 60).unwrap();
+    ensure_open_task_segment(&conn, "after-reopen", now, 15 * 60).unwrap();
 
     let tag = get_block_tag_for_segment(&conn, "after-reopen")
       .unwrap()

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AnimatePresence, motion } from 'motion/react';
 import { Loader2 } from 'lucide-react';
@@ -66,6 +66,7 @@ function readIntroSkipped(): boolean {
 
 export default function LoginPage() {
   const navigate = useNavigate();
+  const staffAutoOpenedForUidRef = useRef<string | null>(null);
   const [phase, setPhase] = useState<'intro' | 'login'>(() => (readIntroSkipped() ? 'login' : 'intro'));
 
   const [email, setEmail] = useState(() => {
@@ -190,6 +191,18 @@ export default function LoginPage() {
       sub.subscription.unsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    if (!userId || !roleResolved) return;
+    if (userRole !== 'staff') {
+      staffAutoOpenedForUidRef.current = null;
+      return;
+    }
+    if (staffAutoOpenedForUidRef.current === userId) return;
+    staffAutoOpenedForUidRef.current = userId;
+    setStatusText('Signed in · opening staff portal…');
+    navigate('/staff', { replace: true });
+  }, [navigate, roleResolved, userId, userRole]);
 
   const handleLaunch = () => {
     try {

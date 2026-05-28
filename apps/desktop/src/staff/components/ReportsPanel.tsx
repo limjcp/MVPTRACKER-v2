@@ -46,6 +46,10 @@ export interface ReportsPanelProps {
   subtitle?: string;
   /** Eg. admin user picker, rendered beside the title block area (wraps flex). */
   headerExtra?: React.ReactNode;
+  billableRateOverride?: number | null;
+  billableCurrencyOverride?: 'USD' | 'CAD' | 'PHP' | null;
+  onBillableRateChange?: (nextRate: number) => Promise<void> | void;
+  onBillableCurrencyChange?: (nextCurrency: 'USD' | 'CAD' | 'PHP') => Promise<void> | void;
 }
 
 const DEFAULT_SUBTITLE = 'Detailed timesheets and productivity analysis';
@@ -62,6 +66,10 @@ export default function ReportsPanel({
   settings,
   subtitle = DEFAULT_SUBTITLE,
   headerExtra,
+  billableRateOverride,
+  billableCurrencyOverride,
+  onBillableRateChange,
+  onBillableCurrencyChange,
 }: ReportsPanelProps) {
   const [rangeMode, setRangeMode] = useState<'preset' | 'custom'>('preset');
   const [range, setRange] = useState<ReportPanelRange>('7d');
@@ -74,6 +82,10 @@ export default function ReportsPanel({
   const [customTo, setCustomTo] = useState(() => format(new Date(), 'yyyy-MM-dd'));
   const [draftFrom, setDraftFrom] = useState(customFrom);
   const [draftTo, setDraftTo] = useState(customTo);
+  const [billableEditOpen, setBillableEditOpen] = useState(false);
+  const [billableSaving, setBillableSaving] = useState(false);
+  const [billableRateDraft, setBillableRateDraft] = useState('');
+  const [billableCurrencyDraft, setBillableCurrencyDraft] = useState<'USD' | 'CAD' | 'PHP'>('USD');
 
   useEffect(() => {
     if (!filterOpen) return;
@@ -179,9 +191,16 @@ export default function ReportsPanel({
     .map(([id, dur]) => ({ project: projects.find((p) => p.id === id), duration: dur }))
     .filter((x) => x.project);
 
-  const defaultRate = settings.defaultHourlyRate ?? 150;
-  const currency = settings.currency ?? 'USD';
+  const defaultRate = billableRateOverride ?? settings.defaultHourlyRate ?? 150;
+  const currency = billableCurrencyOverride ?? ((settings.currency as any) ?? 'USD');
   const billableEstimate = (totalTime / 3600) * defaultRate;
+  const billableEditable = Boolean(onBillableRateChange || onBillableCurrencyChange);
+
+  useEffect(() => {
+    setBillableRateDraft(String(Number.isFinite(defaultRate) ? defaultRate : settings.defaultHourlyRate ?? 150));
+    const c = String(currency ?? 'USD').toUpperCase();
+    setBillableCurrencyDraft(c === 'CAD' || c === 'PHP' ? c : 'USD');
+  }, [defaultRate, currency, settings.defaultHourlyRate]);
 
   const handleExport = async (fmt: ReportFormat) => {
     const win = getReportWindow(filteredStats);
@@ -196,13 +215,19 @@ export default function ReportsPanel({
           await exportReportCsv(filteredStats, activities, manualEntries, projects, win);
           break;
         case 'html':
-          await exportReportHtml(filteredStats, activities, manualEntries, projects, settings, win);
+          await exportReportHtml(filteredStats, activities, manualEntries, projects, settings, win, {
+            billableRateOverride: defaultRate,
+            billableCurrencyOverride: billableCurrencyDraft,
+          });
           break;
         case 'xlsx':
           await exportReportXlsx(filteredStats, activities, manualEntries, projects, win);
           break;
         case 'pdf':
-          await exportReportPdf(filteredStats, activities, manualEntries, projects, settings, win);
+          await exportReportPdf(filteredStats, activities, manualEntries, projects, settings, win, {
+            billableRateOverride: defaultRate,
+            billableCurrencyOverride: billableCurrencyDraft,
+          });
           break;
         default:
           break;
@@ -229,9 +254,32 @@ export default function ReportsPanel({
       manualEntries,
       projects,
       settings,
-      win
+      win,
+      {
+        billableRateOverride: defaultRate,
+        billableCurrencyOverride: billableCurrencyDraft,
+      }
     );
     printHtmlInHiddenFrame(html);
+  };
+
+  const saveBillableEdits = async () => {
+    const n = Number(billableRateDraft);
+    if (!Number.isFinite(n) || n < 0) {
+      window.alert('Rate must be a valid number (0 or greater).');
+      return;
+    }
+    setBillableSaving(true);
+    try {
+      if (onBillableRateChange) await onBillableRateChange(n);
+      if (onBillableCurrencyChange) await onBillableCurrencyChange(billableCurrencyDraft);
+      setBillableEditOpen(false);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      window.alert(`Failed to save billable settings: ${msg}`);
+    } finally {
+      setBillableSaving(false);
+    }
   };
 
   return (
@@ -347,12 +395,6 @@ export default function ReportsPanel({
             color: 'emerald',
           },
           { label: 'Avg Productivity', value: `${avgScore}%`, sub: 'Daily average score', color: 'blue' },
-          {
-            label: 'Billable Estimate',
-            value: `${currency} ${billableEstimate.toFixed(0)}`,
-            sub: `At ${currency} ${defaultRate}/hr (settings)`,
-            color: 'amber',
-          },
         ].map((card) => (
           <div key={card.label} className="bg-[#161920] rounded-2xl p-5 border border-white/[0.05]">
             <p className="text-white/30 text-xs mb-2">{card.label}</p>
@@ -360,6 +402,69 @@ export default function ReportsPanel({
             <p className="text-white/30 text-[11px]">{card.sub}</p>
           </div>
         ))}
+        <div className="bg-[#161920] rounded-2xl p-5 border border-white/[0.05]">
+          <p className="text-white/30 text-xs mb-2">Billable Estimate</p>
+          <p className="text-white text-2xl font-bold mb-1">{currency} {billableEstimate.toFixed(0)}</p>
+          <p className="text-white/30 text-[11px]">At {currency} {defaultRate}/hr</p>
+          {billableEditable ? (
+            <div className="mt-3">
+              {!billableEditOpen ? (
+                <button
+                  type="button"
+                  onClick={() => setBillableEditOpen(true)}
+                  className="px-2.5 py-1 rounded-lg bg-white/[0.06] hover:bg-white/[0.1] text-white/60 hover:text-white text-[11px] transition-colors"
+                >
+                  Edit rate & currency
+                </button>
+              ) : (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={billableRateDraft}
+                      onChange={(e) => setBillableRateDraft(e.target.value)}
+                      className="w-24 rounded-lg border border-white/[0.08] bg-[#0D0F14] text-white text-xs px-2 py-1.5 outline-none focus:border-violet-500/35"
+                    />
+                    <select
+                      value={billableCurrencyDraft}
+                      onChange={(e) => setBillableCurrencyDraft(e.target.value as 'USD' | 'CAD' | 'PHP')}
+                      className="rounded-lg border border-white/[0.08] bg-[#0D0F14] text-white text-xs px-2 py-1.5 outline-none focus:border-violet-500/35"
+                    >
+                      <option value="USD">USD</option>
+                      <option value="CAD">CAD</option>
+                      <option value="PHP">PHP</option>
+                    </select>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void saveBillableEdits()}
+                      disabled={billableSaving}
+                      className="px-2.5 py-1 rounded-lg bg-violet-500/20 border border-violet-500/30 text-violet-200 text-[11px] hover:bg-violet-500/30 disabled:opacity-50"
+                    >
+                      {billableSaving ? 'Saving…' : 'Save'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBillableEditOpen(false);
+                        setBillableRateDraft(String(defaultRate));
+                        const c = String(currency ?? 'USD').toUpperCase();
+                        setBillableCurrencyDraft(c === 'CAD' || c === 'PHP' ? c : 'USD');
+                      }}
+                      disabled={billableSaving}
+                      className="px-2.5 py-1 rounded-lg bg-white/[0.06] hover:bg-white/[0.1] text-white/60 text-[11px] disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : null}
+        </div>
       </div>
 
       <div className="grid grid-cols-12 gap-4 mb-4">

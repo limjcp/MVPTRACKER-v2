@@ -47,6 +47,23 @@ create table if not exists public.profiles (
   created_at timestamptz not null default now()
 );
 
+alter table public.profiles add column if not exists hourly_rate numeric;
+alter table public.profiles add column if not exists currency text;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'profiles_currency_check'
+      and conrelid = 'public.profiles'::regclass
+  ) then
+    alter table public.profiles
+      add constraint profiles_currency_check
+      check (currency is null or currency in ('USD', 'CAD', 'PHP'));
+  end if;
+end $$;
+
 alter table public.profiles enable row level security;
 
 drop policy if exists profiles_select_own_or_admin on public.profiles;
@@ -63,6 +80,13 @@ for insert
 to authenticated
 with check (user_id = auth.uid());
 
+drop policy if exists profiles_upsert_admin on public.profiles;
+create policy profiles_upsert_admin
+on public.profiles
+for insert
+to authenticated
+with check (app_private.is_admin(auth.uid()));
+
 drop policy if exists profiles_update_own on public.profiles;
 create policy profiles_update_own
 on public.profiles
@@ -70,6 +94,14 @@ for update
 to authenticated
 using (user_id = auth.uid())
 with check (user_id = auth.uid());
+
+drop policy if exists profiles_update_admin on public.profiles;
+create policy profiles_update_admin
+on public.profiles
+for update
+to authenticated
+using (app_private.is_admin(auth.uid()))
+with check (app_private.is_admin(auth.uid()));
 
 -- Per-user settings that affect analytics.
 create table if not exists public.user_settings (

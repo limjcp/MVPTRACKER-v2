@@ -14,8 +14,25 @@ export default function ProtectedRoute({ children }: { children: React.ReactNode
       setReady(true);
       return;
     }
-    void client.auth.getSession().then(({ data }) => {
-      setAuthed(!!data.session);
+    void client.auth.getSession().then(({ data, error }) => {
+      let isAuthed = !!data.session;
+      if (error && !data.session) {
+        try {
+          const authKey = Object.keys(localStorage).find((k) => k.startsWith('sb-') && k.endsWith('-auth-token'));
+          if (authKey) {
+            const rawTokenData = localStorage.getItem(authKey);
+            if (rawTokenData) {
+              const parsedToken = JSON.parse(rawTokenData);
+              if (parsedToken?.access_token) {
+                isAuthed = true;
+              }
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+      setAuthed(isAuthed);
       setReady(true);
     });
   }, []);

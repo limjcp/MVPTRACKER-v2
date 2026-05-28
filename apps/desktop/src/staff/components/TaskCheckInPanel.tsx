@@ -199,7 +199,7 @@ export default function TaskCheckInPanel() {
     };
     void tryPrepare().catch(() => {
       window.setTimeout(() => {
-        void tryPrepare().catch(() => {});
+        void tryPrepare().catch(() => { });
       }, 250);
     });
   }, []);
@@ -230,7 +230,7 @@ export default function TaskCheckInPanel() {
   );
 
   const selectedTaskOpt = getTaskTypeOption(taskSlug || undefined);
-  const isOther = taskSlug === OTHER_TASK_SLUG;
+  const isOther = taskSlug === OTHER_TASK_SLUG || taskSlug.startsWith('custom__');
 
   const canStartNewBlock = useMemo(() => {
     const corpOk = corpId.trim() !== '' || newCorpDraft.trim() !== '';
@@ -239,6 +239,16 @@ export default function TaskCheckInPanel() {
     const otherOk = !isOther || otherDraft.trim() !== '';
     return corpOk && taskOk && detailOk && otherOk && !busy;
   }, [corpId, newCorpDraft, taskSlug, selectedTaskOpt?.requiresDetail, detailDraft, isOther, otherDraft, busy]);
+
+  const [customTasks, setCustomTasks] = useState<string[]>([]);
+  useEffect(() => {
+    try {
+      const v = localStorage.getItem('mvptime:customTasks');
+      if (v) setCustomTasks(JSON.parse(v));
+    } catch {
+      // ignore
+    }
+  }, []);
 
   const closeWindow = async () => {
     if (!isTauri()) return;
@@ -309,8 +319,14 @@ export default function TaskCheckInPanel() {
     const prevSlug = tag?.taskType ?? '';
     setTaskSlug(prevSlug);
     if (prevSlug === OTHER_TASK_SLUG) {
-      setOtherDraft(tag?.taskTypeDetail ?? '');
+      const detail = tag?.taskTypeDetail ?? '';
+      setOtherDraft(detail);
       setDetailDraft('');
+      if (detail) {
+        setTaskSlug('custom__' + detail);
+      } else {
+        setTaskSlug(OTHER_TASK_SLUG);
+      }
     } else {
       const opt = getTaskTypeOption(prevSlug);
       setDetailDraft(opt?.requiresDetail ? (tag?.taskTypeDetail ?? '') : '');
@@ -359,9 +375,22 @@ export default function TaskCheckInPanel() {
 
       let taskType: string | undefined = taskSlug || undefined;
       let taskTypeDetail: string | undefined;
-      if (taskSlug === OTHER_TASK_SLUG) {
+      if (taskSlug === OTHER_TASK_SLUG || taskSlug.startsWith('custom__')) {
         taskType = OTHER_TASK_SLUG;
         taskTypeDetail = otherDraft.trim() || undefined;
+        if (taskTypeDetail) {
+          try {
+            const existingRaw = localStorage.getItem('mvptime:customTasks');
+            const existing = existingRaw ? JSON.parse(existingRaw) : [];
+            if (!existing.includes(taskTypeDetail)) {
+              const next = [...existing, taskTypeDetail];
+              localStorage.setItem('mvptime:customTasks', JSON.stringify(next));
+              setCustomTasks(next);
+            }
+          } catch {
+            // ignore
+          }
+        }
       } else if (taskSlug) {
         const opt = getTaskTypeOption(taskSlug);
         taskTypeDetail = opt?.requiresDetail ? detailDraft.trim() || undefined : undefined;
@@ -516,14 +545,29 @@ export default function TaskCheckInPanel() {
                   value={taskSlug}
                   onChange={(e) => {
                     const v = e.target.value;
-                    setTaskSlug(v);
-                    setDetailDraft('');
-                    setOtherDraft('');
+                    if (v.startsWith('custom__')) {
+                      setTaskSlug(v);
+                      setOtherDraft(v.slice('custom__'.length));
+                      setDetailDraft('');
+                    } else {
+                      setTaskSlug(v);
+                      setDetailDraft('');
+                      setOtherDraft('');
+                    }
                   }}
                   disabled={busy}
                   className="app-select-dark w-full min-w-0 rounded-lg border border-white/[0.12] bg-[#0D0F14] px-1.5 py-1.5 text-[11px] text-zinc-100 focus:border-violet-500/50 focus:outline-none disabled:opacity-50 shrink-0"
                 >
                   <option value="">— Task type —</option>
+                  {customTasks.length > 0 && (
+                    <optgroup label="Custom Tasks">
+                      {customTasks.map((ct) => (
+                        <option key={`ct-${ct}`} value={`custom__${ct}`}>
+                          {ct}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
                   {TASK_TYPES.map((t) => (
                     <option key={t.slug} value={t.slug}>
                       {t.label}

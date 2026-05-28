@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useAutomaticTracking } from './useAutomaticTracking';
 import { useTaskCheckInScheduler } from './useTaskCheckInScheduler';
 import { useSupabaseSync } from './useSupabaseSync';
@@ -12,6 +12,7 @@ import { useStore } from './store/useStore';
 export default function StaffBackgroundServices() {
   const { hydrate } = useStore();
   const trackingPaused = useStore((s) => s.trackingPaused);
+  const [hydrated, setHydrated] = useState(false);
 
   // The check-in window route is `/staff?checkin=1`. When it is open, we avoid spawning another.
   const isCheckIn =
@@ -22,13 +23,23 @@ export default function StaffBackgroundServices() {
   const trackingFeaturesEnabled = enabled && !trackingPaused;
 
   useEffect(() => {
-    if (isCheckIn) return;
-    void hydrate();
+    let cancelled = false;
+    if (isCheckIn) {
+      setHydrated(false);
+      return;
+    }
+    setHydrated(false);
+    void hydrate().finally(() => {
+      if (!cancelled) setHydrated(true);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [hydrate, isCheckIn]);
 
   useTaskCheckInScheduler(trackingFeaturesEnabled);
   useAutomaticTracking(trackingFeaturesEnabled);
-  useSupabaseSync(enabled);
+  useSupabaseSync(enabled && hydrated);
   useAppUpdater(enabled);
 
   return null;

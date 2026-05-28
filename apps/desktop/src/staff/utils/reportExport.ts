@@ -7,6 +7,12 @@ import type { ActivityEntry, AppSettings, DailyStats, ManualEntry, Project } fro
 import { formatDuration } from './format';
 
 export type ReportFormat = 'pdf' | 'xlsx' | 'csv' | 'html';
+export type BillableCurrency = 'USD' | 'CAD' | 'PHP';
+
+type BillableOverride = {
+  billableRateOverride?: number | null;
+  billableCurrencyOverride?: BillableCurrency | null;
+};
 
 export function getReportWindow(filteredStats: DailyStats[]): { startDate: string; endDate: string } | null {
   if (filteredStats.length === 0) return null;
@@ -278,14 +284,15 @@ export async function exportReportHtml(
   manualEntries: ManualEntry[],
   projects: Project[],
   settings: AppSettings,
-  window: { startDate: string; endDate: string }
+  window: { startDate: string; endDate: string },
+  override?: BillableOverride
 ): Promise<void> {
   const { headers, rows } = buildDailySummaryTable(filteredStats, projects);
   const items = buildLineItems(activities, manualEntries, window.startDate, window.endDate, projects);
   const totalSec = filteredStats.reduce((s, d) => s + d.totalTime, 0);
   const productiveSec = filteredStats.reduce((s, d) => s + d.productiveTime, 0);
-  const rate = settings.defaultHourlyRate ?? 150;
-  const currency = settings.currency ?? 'USD';
+  const rate = override?.billableRateOverride ?? settings.defaultHourlyRate ?? 150;
+  const currency = override?.billableCurrencyOverride ?? ((settings.currency as any) ?? 'USD');
   const est = ((totalSec / 3600) * rate).toFixed(2);
 
   const summaryRowsHtml = rows
@@ -395,13 +402,14 @@ export async function exportReportPdf(
   manualEntries: ManualEntry[],
   projects: Project[],
   settings: AppSettings,
-  window: { startDate: string; endDate: string }
+  window: { startDate: string; endDate: string },
+  override?: BillableOverride
 ): Promise<void> {
   const { headers, rows } = buildDailySummaryTable(filteredStats, projects);
   const items = buildLineItems(activities, manualEntries, window.startDate, window.endDate, projects);
   const totalSec = filteredStats.reduce((s, d) => s + d.totalTime, 0);
-  const rate = settings.defaultHourlyRate ?? 150;
-  const currency = settings.currency ?? 'USD';
+  const rate = override?.billableRateOverride ?? settings.defaultHourlyRate ?? 150;
+  const currency = override?.billableCurrencyOverride ?? ((settings.currency as any) ?? 'USD');
   const est = ((totalSec / 3600) * rate).toFixed(2);
 
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
@@ -462,12 +470,13 @@ export function buildTimesheetPrintHtml(
   _manualEntries: ManualEntry[],
   _projects: Project[],
   settings: AppSettings,
-  window: { startDate: string; endDate: string }
+  window: { startDate: string; endDate: string },
+  override?: BillableOverride
 ): string {
   const totalSec = filteredStats.reduce((s, d) => s + d.totalTime, 0);
   const totalProductiveSec = filteredStats.reduce((s, d) => s + d.productiveTime, 0);
-  const rate = settings.defaultHourlyRate ?? 150;
-  const currency = settings.currency ?? 'USD';
+  const rate = override?.billableRateOverride ?? settings.defaultHourlyRate ?? 150;
+  const currency = override?.billableCurrencyOverride ?? ((settings.currency as any) ?? 'USD');
   const est = ((totalSec / 3600) * rate).toFixed(2);
 
   const dailyRows = filteredStats

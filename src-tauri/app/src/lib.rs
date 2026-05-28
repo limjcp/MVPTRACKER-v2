@@ -401,7 +401,7 @@ fn db_ensure_open_task_segment(
 ) -> Result<mvptime_core::sqlite::TaskSegmentRow, String> {
   let conn = mvptime_core::sqlite::open_db(&db.0).map_err(|e| e.to_string())?;
   mvptime_core::sqlite::migrate(&conn).map_err(|e| e.to_string())?;
-  let max_gap_seconds = max_gap_seconds.unwrap_or(5 * 60);
+  let max_gap_seconds = max_gap_seconds.unwrap_or(15 * 60);
   mvptime_core::sqlite::ensure_open_task_segment(&conn, &new_id, &now_iso, max_gap_seconds)
     .map_err(|e| e.to_string())
 }

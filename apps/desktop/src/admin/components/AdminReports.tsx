@@ -6,7 +6,14 @@ import ReportsPanel from '../../staff/components/ReportsPanel';
 import type { ActivityEntry, AppSettings, DailyStats, ManualEntry, Project, ProjectColor } from '../../staff/types';
 
 type RoleRow = { user_id: string; role: 'admin' | 'staff' };
-type ProfileRow = { user_id: string; full_name: string | null; avatar_url: string | null };
+type BillableCurrency = 'USD' | 'CAD' | 'PHP';
+type ProfileRow = {
+  user_id: string;
+  full_name: string | null;
+  avatar_url: string | null;
+  hourly_rate: number | null;
+  currency: BillableCurrency | null;
+};
 
 type DailyRow = {
   day: string;
@@ -203,13 +210,17 @@ export default function AdminReports() {
   const settings = useAdminSettingsStore((s) => s.settings);
   const [usersLoading, setUsersLoading] = useState(true);
   const [usersError, setUsersError] = useState<string | null>(null);
+  const [usersWarning, setUsersWarning] = useState<string | null>(null);
   const [staffUsers, setStaffUsers] = useState<Array<{ user_id: string; label: string }>>([]);
   const [selectedUserId, setSelectedUserId] = useState<string>('');
 
   const [dataLoading, setDataLoading] = useState(false);
   const [dataError, setDataError] = useState<string | null>(null);
+  const [dataWarning, setDataWarning] = useState<string | null>(null);
   const [dailyStatsOldestFirst, setDailyStatsOldestFirst] = useState<DailyStats[]>([]);
   const [rollupProjects, setRollupProjects] = useState<Project[]>([]);
+  const [billableRate, setBillableRate] = useState<number | null>(null);
+  const [billableCurrency, setBillableCurrency] = useState<BillableCurrency | null>(null);
 
   useEffect(() => {
     const client = supabase;
@@ -233,7 +244,10 @@ export default function AdminReports() {
 
         let profiles: ProfileRow[] = [];
         if (userIds.length > 0) {
-          const { data: profRows } = await client.from('profiles').select('user_id, full_name, avatar_url').in('user_id', userIds);
+          const { data: profRows } = await client
+            .from('profiles')
+            .select('user_id, full_name, avatar_url, hourly_rate, currency')
+            .in('user_id', userIds);
           profiles = (profRows ?? []) as ProfileRow[];
         }
         const profileById = new Map(profiles.map((p) => [p.user_id, p]));
@@ -246,6 +260,11 @@ export default function AdminReports() {
 
         if (!cancelled) {
           setStaffUsers(list);
+          setUsersWarning(
+            list.length === 0
+              ? 'No users found in user_roles. Users without role rows will not appear in this picker.'
+              : null
+          );
           setSelectedUserId((cur) => (cur && list.some((x) => x.user_id === cur) ? cur : ''));
         }
       } catch (e: unknown) {
@@ -265,6 +284,8 @@ export default function AdminReports() {
     if (!client || !selectedUserId) {
       setDailyStatsOldestFirst([]);
       setRollupProjects([]);
+      setBillableRate(null);
+      setBillableCurrency(null);
       setDataLoading(false);
       setDataError(null);
       return;
@@ -277,10 +298,11 @@ export default function AdminReports() {
     let cancelled = false;
     setDataLoading(true);
     setDataError(null);
+    setDataWarning(null);
 
     void (async () => {
       try {
-        const [dRes, pRes, aRes, tbRes] = await Promise.all([
+        const [dRes, pRes, aRes, tbRes, profRes] = await Promise.all([
           client
             .from('user_daily_stats')
             .select('day, total_seconds, productive_seconds, unproductive_seconds, idle_seconds, productivity_score')
@@ -309,21 +331,38 @@ export default function AdminReports() {
             .gte('day', startDay)
             .lte('day', today)
             .order('day', { ascending: true }),
+          client
+            .from('profiles')
+            .select('hourly_rate, currency')
+            .eq('user_id', selectedUserId)
+            .maybeSingle(),
         ]);
         if (dRes.error) throw dRes.error;
         if (pRes.error) throw pRes.error;
         if (aRes.error) throw aRes.error;
-        if (tbRes.error) throw tbRes.error;
+        if (tbRes.error) {
+          if (!cancelled) {
+            setDataWarning(
+              'Task-block rollups are temporarily unavailable. Totals still render from daily/project/app rollups.'
+            );
+          }
+          console.warn('admin reports: user_task_block_daily query failed', tbRes.error);
+        }
+        if (profRes.error) throw profRes.error;
         if (cancelled) return;
 
         const mapped = buildFromRollups(
           (dRes.data ?? []) as DailyRow[],
           (pRes.data ?? []) as ProjectDailyRow[],
           (aRes.data ?? []) as AppDailyRow[],
-          (tbRes.data ?? []) as TaskBlockDailyRow[]
+          (tbRes.error ? [] : tbRes.data ?? []) as TaskBlockDailyRow[]
         );
         setDailyStatsOldestFirst(mapped.dailyStats);
         setRollupProjects(mapped.projects);
+        const profileRate = Number((profRes.data as any)?.hourly_rate);
+        setBillableRate(Number.isFinite(profileRate) ? profileRate : null);
+        const c = String((profRes.data as any)?.currency ?? '').toUpperCase();
+        setBillableCurrency(c === 'USD' || c === 'CAD' || c === 'PHP' ? (c as BillableCurrency) : null);
       } catch (e: unknown) {
         if (!cancelled) setDataError(String((e as Error)?.message ?? e));
       } finally {
@@ -348,23 +387,26 @@ export default function AdminReports() {
       return <p className="text-red-400/90 text-xs">{usersError}</p>;
     }
     return (
-      <label className="flex flex-col gap-1 max-w-md">
-        <span className="text-white/40 text-[11px] uppercase tracking-wider">Report for user</span>
-        <select
-          value={selectedUserId}
-          onChange={(e) => setSelectedUserId(e.target.value)}
-          className="rounded-xl border border-white/[0.08] bg-[#161920] text-white text-sm px-3 py-2 outline-none focus:border-violet-500/40"
-        >
-          <option value="">Choose a user…</option>
-          {staffUsers.map((u) => (
-            <option key={u.user_id} value={u.user_id}>
-              {u.label}
-            </option>
-          ))}
-        </select>
-      </label>
+      <div className="flex flex-col gap-1 max-w-md">
+        <label className="flex flex-col gap-1">
+          <span className="text-white/40 text-[11px] uppercase tracking-wider">Report for user</span>
+          <select
+            value={selectedUserId}
+            onChange={(e) => setSelectedUserId(e.target.value)}
+            className="rounded-xl border border-white/[0.08] bg-[#161920] text-white text-sm px-3 py-2 outline-none focus:border-violet-500/40"
+          >
+            <option value="">Choose a user…</option>
+            {staffUsers.map((u) => (
+              <option key={u.user_id} value={u.user_id}>
+                {u.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {usersWarning ? <p className="text-amber-300/80 text-[11px]">{usersWarning}</p> : null}
+      </div>
     );
-  }, [usersLoading, usersError, staffUsers, selectedUserId]);
+  }, [usersLoading, usersError, usersWarning, staffUsers, selectedUserId]);
 
   if (!supabase && !usersLoading) {
     return (
@@ -382,7 +424,7 @@ export default function AdminReports() {
         activities={emptyActs}
         manualEntries={emptyManuals}
         settings={settings as AppSettings}
-        subtitle={subtitle}
+        subtitle={usersWarning ? `${subtitle} ${usersWarning}` : subtitle}
         headerExtra={picker}
       />
     );
@@ -408,6 +450,17 @@ export default function AdminReports() {
 
   const selectedLabel = staffUsers.find((u) => u.user_id === selectedUserId)?.label ?? selectedUserId;
 
+  const saveBillable = async (next: { rate?: number | null; currency?: BillableCurrency | null }) => {
+    if (!supabase || !selectedUserId) return;
+    const nextRate = next.rate ?? billableRate;
+    const nextCurrency = next.currency ?? billableCurrency;
+    const payload: Record<string, any> = { user_id: selectedUserId };
+    if (nextRate != null && Number.isFinite(nextRate)) payload.hourly_rate = nextRate;
+    if (nextCurrency === 'USD' || nextCurrency === 'CAD' || nextCurrency === 'PHP') payload.currency = nextCurrency;
+    const { error } = await supabase.from('profiles').upsert(payload, { onConflict: 'user_id' });
+    if (error) throw error;
+  };
+
   return (
     <ReportsPanel
       dailyStatsOldestFirst={dailyStatsOldestFirst}
@@ -415,8 +468,18 @@ export default function AdminReports() {
       activities={emptyActs}
       manualEntries={emptyManuals}
       settings={settings as AppSettings}
-      subtitle={`${selectedLabel}. ${subtitle}`}
+      subtitle={`${selectedLabel}. ${subtitle}${dataWarning ? ` ${dataWarning}` : ''}`}
       headerExtra={picker}
+      billableRateOverride={billableRate}
+      billableCurrencyOverride={billableCurrency}
+      onBillableRateChange={async (nextRate) => {
+        setBillableRate(nextRate);
+        await saveBillable({ rate: nextRate });
+      }}
+      onBillableCurrencyChange={async (nextCurrency) => {
+        setBillableCurrency(nextCurrency);
+        await saveBillable({ currency: nextCurrency });
+      }}
     />
   );
 }

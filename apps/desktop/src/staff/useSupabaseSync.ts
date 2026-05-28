@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { computeDailyStats } from './store/derive';
 import { useStore } from './store/useStore';
@@ -41,6 +41,57 @@ function startOfDayLocal(dateStr: string): Date {
 
 function endOfDayLocal(dateStr: string): Date {
   return new Date(`${dateStr}T23:59:59.999`);
+}
+
+function diffDaysInclusive(startDay: string, endDay: string): number {
+  const startMs = startOfDayLocal(startDay).getTime();
+  const endMs = startOfDayLocal(endDay).getTime();
+  const diff = Math.floor((endMs - startMs) / (24 * 3600 * 1000));
+  return Math.max(0, diff) + 1;
+}
+
+function minDay(a: string | null, b: string | null): string | null {
+  if (!a) return b;
+  if (!b) return a;
+  return startOfDayLocal(a).getTime() <= startOfDayLocal(b).getTime() ? a : b;
+}
+
+function oldestLocalTrackedDay(
+  activities: ActivityEntry[],
+  manualEntries: ManualEntry[],
+  taskSegments: TaskSegment[]
+): string | null {
+  let oldest: string | null = null;
+  for (const a of activities) {
+    oldest = minDay(oldest, dayStrFromIso(a.startTime));
+  }
+  for (const m of manualEntries) {
+    oldest = minDay(oldest, dayStrFromIso(m.startTime));
+  }
+  for (const s of taskSegments) {
+    oldest = minDay(oldest, dayStrFromIso(s.startTime));
+  }
+  return oldest;
+}
+
+const BACKFILL_CURSOR_KEY = 'mvptracker.supabase.backfill.oldestSyncedDay.v1';
+
+function readBackfillCursor(uid: string): string | null {
+  try {
+    const raw = window.localStorage.getItem(`${BACKFILL_CURSOR_KEY}.${uid}`);
+    if (!raw) return null;
+    return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeBackfillCursor(uid: string, day: string): void {
+  try {
+    window.localStorage.setItem(`${BACKFILL_CURSOR_KEY}.${uid}`, day);
+  } catch {
+    // Best-effort cursor write only.
+  }
 }
 
 function clipMsToDay(startMs: number, endMs: number, dateStr: string): { startMs: number; endMs: number } | null {
@@ -112,7 +163,7 @@ function buildUserTaskBlockDaily(
       const corpName = corporation_id ? corpNameById.get(corporation_id) : undefined;
       const taskLabel =
         task_type && String(task_type).trim()
-          ? formatTaskType(task_type, task_type_detail)
+          ? formatTaskType(task_type, task_type_detail ?? undefined)
           : undefined;
 
       const label =
@@ -160,8 +211,8 @@ function buildUserAppDaily(activities: ActivityEntry[], daysBack: number, anchor
 }
 
 function buildUserProjectDaily(
-  activities: ActivityEntry[],
-  manualEntries: ManualEntry[],
+  _activities: ActivityEntry[],
+  _manualEntries: ManualEntry[],
   projects: Project[],
   daysBack: number,
   anchorIso: string,
@@ -185,6 +236,89 @@ function buildUserProjectDaily(
       if (seconds <= 0) continue;
       out.push({ day, project_name, seconds });
     }
+  }
+  return out;
+}
+
+function clipMsToHour(startMs: number, endMs: number, hourStartMs: number, hourEndMs: number) {
+  const s = Math.max(startMs, hourStartMs);
+  const e = Math.min(endMs, hourEndMs);
+  if (e <= s) return null;
+  return { startMs: s, endMs: e };
+}
+
+function buildUserHourlyStats(
+  activities: ActivityEntry[],
+  manualEntries: ManualEntry[],
+  day: string,
+  anchorIso: string
+): Array<{ day: string; hour: number; total_seconds: number; productive_seconds: number; idle_seconds: number }> {
+  const rows: Array<{ startMs: number; endMs: number; prod: number }> = [];
+  for (const a of activities) {
+    const startMs = new Date(a.startTime).getTime();
+    const endMs = new Date(a.endTime).getTime();
+    if (!(Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > startMs)) continue;
+    const clip = clipMsToDay(startMs, endMs, day);
+    if (!clip) continue;
+    rows.push({ startMs: clip.startMs, endMs: clip.endMs, prod: Number(a.productivity) || 0 });
+  }
+  for (const m of manualEntries) {
+    const startMs = new Date(m.startTime).getTime();
+    const endMs = new Date(m.endTime).getTime();
+    if (!(Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > startMs)) continue;
+    const clip = clipMsToDay(startMs, endMs, day);
+    if (!clip) continue;
+    rows.push({ startMs: clip.startMs, endMs: clip.endMs, prod: 1 });
+  }
+  if (rows.length === 0) return [];
+
+  const out: Array<{ day: string; hour: number; total_seconds: number; productive_seconds: number; idle_seconds: number }> = [];
+  const dayStartMs = startOfDayLocal(day).getTime();
+  const anchorMs = new Date(anchorIso).getTime();
+  for (let hour = 0; hour < 24; hour++) {
+    const hourStartMs = dayStartMs + hour * 3600_000;
+    const hourEndMs = hourStartMs + 3600_000;
+    const clipped = rows
+      .map((r) => {
+        const c = clipMsToHour(r.startMs, r.endMs, hourStartMs, hourEndMs);
+        if (!c) return null;
+        return { startMs: c.startMs, endMs: c.endMs, prod: r.prod };
+      })
+      .filter(Boolean) as Array<{ startMs: number; endMs: number; prod: number }>;
+    if (clipped.length === 0) continue;
+
+    const bounds = new Set<number>();
+    for (const c of clipped) {
+      bounds.add(c.startMs);
+      bounds.add(c.endMs);
+    }
+    const sorted = [...bounds].sort((a, b) => a - b);
+
+    let total = 0;
+    let productive = 0;
+    for (let i = 0; i < sorted.length - 1; i++) {
+      const lo = sorted[i]!;
+      const hi = sorted[i + 1]!;
+      if (hi <= lo) continue;
+      const covering = clipped.filter((r) => r.startMs < hi && r.endMs > lo);
+      if (covering.length === 0) continue;
+      const sec = clampInt((hi - lo) / 1000);
+      if (sec <= 0) continue;
+      total += sec;
+      const anyNeg = covering.some((r) => r.prod < 0);
+      const anyPos = covering.some((r) => r.prod > 0);
+      if (!anyNeg && anyPos) productive += sec;
+    }
+
+    const elapsedSec = clampInt((Math.max(hourStartMs, Math.min(hourEndMs, anchorMs)) - hourStartMs) / 1000);
+    const idle = Math.max(0, elapsedSec - total);
+    out.push({
+      day,
+      hour,
+      total_seconds: clampInt(total),
+      productive_seconds: clampInt(productive),
+      idle_seconds: clampInt(idle),
+    });
   }
   return out;
 }
@@ -227,38 +361,61 @@ async function upsertAll<T extends Record<string, any>>(
  */
 export function useSupabaseSync(enabled: boolean) {
   const syncNonce = useStore((s) => s.syncNonce);
-
-  const activities = useStore((s) => s.activities);
-  const manualEntries = useStore((s) => s.manualEntries);
-  const projects = useStore((s) => s.projects);
-  const corporations = useStore((s) => s.corporations);
-  const blockTags = useStore((s) => s.blockTags);
-  const taskSegments = useStore((s) => s.taskSegments);
-  const settings = useStore((s) => s.settings);
-  const trackingStatus = useStore((s) => s.trackingStatus);
-  const currentApp = useStore((s) => s.currentApp);
-
-  const anchorIso = useMemo(() => new Date().toISOString(), [syncNonce]);
+  const syncEnabled = useStore((s) => s.settings.syncEnabled);
   const busyRef = useRef(false);
+  const heartbeatBusyRef = useRef(false);
   const lastAutoSyncAtRef = useRef<number>(0);
+  const lastActiveAtRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!enabled) return;
-    if (!settings.syncEnabled) {
+    if (!syncEnabled) {
       useStore.setState({ syncStatus: 'offline' });
       return;
     }
-    if (!supabase) {
+    const client = supabase;
+    if (!client) {
       useStore.setState({ syncStatus: 'offline' });
       return;
     }
+
+    const upsertPresenceByUid = async (uid: string, nowIso: string) => {
+      const state = useStore.getState();
+      const isActive = state.trackingStatus === 'active';
+      if (isActive) lastActiveAtRef.current = nowIso;
+      const lastActiveIso = isActive ? nowIso : lastActiveAtRef.current;
+      const row: Record<string, any> = {
+        user_id: uid,
+        last_heartbeat_at: nowIso,
+        updated_at: nowIso,
+      };
+      // Keep the latest active timestamp instead of nulling it out while idle.
+      if (lastActiveIso) row.last_active_at = lastActiveIso;
+      await upsertAll('user_presence', [row], 'user_id');
+    };
+
+    const doHeartbeat = async () => {
+      if (heartbeatBusyRef.current) return;
+      heartbeatBusyRef.current = true;
+      try {
+        const { data, error } = await client.auth.getSession();
+        if (error) throw error;
+        const session = data.session;
+        if (!session) return;
+        await upsertPresenceByUid(session.user.id, new Date().toISOString());
+      } catch (e) {
+        console.error('supabase presence heartbeat', e);
+      } finally {
+        heartbeatBusyRef.current = false;
+      }
+    };
 
     const doSync = async (reason: 'manual' | 'auto') => {
       if (busyRef.current) return;
       busyRef.current = true;
       useStore.setState({ syncStatus: 'syncing' });
       try {
-        const { data, error } = await supabase.auth.getSession();
+        const { data, error } = await client.auth.getSession();
         if (error) throw error;
         const session = data.session;
         if (!session) {
@@ -267,121 +424,201 @@ export function useSupabaseSync(enabled: boolean) {
         }
         const uid = session.user.id;
         const nowIso = new Date().toISOString();
-
-        // Presence heartbeat
-        await upsertAll(
-          'user_presence',
-          [
-            {
-              user_id: uid,
-              last_heartbeat_at: nowIso,
-              last_active_at: trackingStatus === 'active' ? nowIso : null,
-              updated_at: nowIso,
-            },
-          ],
-          'user_id'
-        );
-
-        // Settings affecting analytics (idle threshold)
-        await upsertAll(
-          'user_settings',
-          [{ user_id: uid, idle_threshold_minutes: settings.idleThreshold, updated_at: nowIso }],
-          'user_id'
-        );
-
-        // Rollups (last 30 days)
-        const anchorDate = new Date();
-        const lastIso = useStore.getState().lastAutomaticPollAt;
-        const lastPollDt = lastIso ? new Date(lastIso) : null;
-        const lastAutomaticPollAt =
-          lastPollDt && !Number.isNaN(lastPollDt.getTime()) ? lastPollDt : null;
-        const daily = computeDailyStats(
+        const state = useStore.getState();
+        const {
           activities,
           manualEntries,
-          30,
-          anchorDate,
-          settings.idleThreshold,
-          lastAutomaticPollAt
-        );
-        await upsertAll(
-          'user_daily_stats',
-          daily.map((d) => ({
-            user_id: uid,
-            day: d.date,
-            total_seconds: clampInt(d.totalTime),
-            productive_seconds: clampInt(d.productiveTime),
-            unproductive_seconds: clampInt(d.unproductiveTime),
-            idle_seconds: clampInt(d.idleTime),
-            productivity_score: clampInt(d.productivityScore),
-            updated_at: nowIso,
-          })),
-          'user_id,day'
-        );
+          projects,
+          corporations,
+          blockTags,
+          taskSegments,
+          settings,
+          trackingStatus,
+          currentApp,
+        } = state;
 
-        const appDaily = buildUserAppDaily(activities, 30, anchorIso);
-        await upsertAll(
-          'user_app_daily',
-          appDaily.map((r) => ({
-            user_id: uid,
-            day: r.day,
-            app_name: r.app_name,
-            seconds: clampInt(r.seconds),
-            updated_at: nowIso,
-          })),
-          'user_id,day,app_name'
-        );
+        const failures: string[] = [];
+        const runStep = async (name: string, fn: () => Promise<void>) => {
+          try {
+            await fn();
+          } catch (error) {
+            failures.push(name);
+            console.error(`supabase sync step failed: ${name}`, error);
+          }
+        };
 
-        const projectDaily = buildUserProjectDaily(activities, manualEntries, projects, 30, anchorIso, daily);
-        await upsertAll(
-          'user_project_daily',
-          projectDaily.map((r) => ({
-            user_id: uid,
-            day: r.day,
-            project_name: r.project_name,
-            seconds: clampInt(r.seconds),
-            updated_at: nowIso,
-          })),
-          'user_id,day,project_name'
-        );
+        await runStep('user_presence', async () => {
+          await upsertPresenceByUid(uid, nowIso);
+        });
 
-        const taskBlocksDaily = buildUserTaskBlockDaily(taskSegments, blockTags, corporations, 30, anchorIso);
-        await upsertAll(
-          'user_task_block_daily',
-          taskBlocksDaily.map((r) => ({
-            user_id: uid,
-            day: r.day,
-            corporation_id: r.corporation_id,
-            task_type: r.task_type,
-            task_type_detail: r.task_type_detail,
-            label: r.label,
-            seconds: clampInt(r.seconds),
-            updated_at: nowIso,
-          })),
-          'user_id,day,label'
-        );
+        await runStep('user_settings', async () => {
+          await upsertAll(
+            'user_settings',
+            [{ user_id: uid, idle_threshold_minutes: settings.idleThreshold, updated_at: nowIso }],
+            'user_id'
+          );
+        });
+
+        const uploadRollupWindow = async (windowEndDay: string, daysBack: number, includeHourly: boolean) => {
+          const anchorDate = endOfDayLocal(windowEndDay);
+          const anchorIso = anchorDate.toISOString();
+          const lastIso = useStore.getState().lastAutomaticPollAt;
+          const lastPollDt = lastIso ? new Date(lastIso) : null;
+          const lastAutomaticPollAt =
+            lastPollDt && !Number.isNaN(lastPollDt.getTime()) ? lastPollDt : null;
+
+          const daily = computeDailyStats(
+            activities,
+            manualEntries,
+            daysBack,
+            anchorDate,
+            settings.idleThreshold,
+            lastAutomaticPollAt
+          );
+          await runStep('user_daily_stats', async () => {
+            await upsertAll(
+              'user_daily_stats',
+              daily.map((d) => ({
+                user_id: uid,
+                day: d.date,
+                total_seconds: clampInt(d.totalTime),
+                productive_seconds: clampInt(d.productiveTime),
+                unproductive_seconds: clampInt(d.unproductiveTime),
+                idle_seconds: clampInt(d.idleTime),
+                productivity_score: clampInt(d.productivityScore),
+                updated_at: nowIso,
+              })),
+              'user_id,day'
+            );
+          });
+
+          if (includeHourly) {
+            const todayLocalDay = localDayKey(anchorDate);
+            const hourly = buildUserHourlyStats(activities, manualEntries, todayLocalDay, nowIso);
+            await runStep('user_hourly_stats', async () => {
+              await upsertAll(
+                'user_hourly_stats',
+                hourly.map((r) => ({
+                  user_id: uid,
+                  day: r.day,
+                  hour: r.hour,
+                  total_seconds: clampInt(r.total_seconds),
+                  productive_seconds: clampInt(r.productive_seconds),
+                  idle_seconds: clampInt(r.idle_seconds),
+                  updated_at: nowIso,
+                })),
+                'user_id,day,hour'
+              );
+            });
+          }
+
+          const appDaily = buildUserAppDaily(activities, daysBack, anchorIso);
+          await runStep('user_app_daily', async () => {
+            await upsertAll(
+              'user_app_daily',
+              appDaily.map((r) => ({
+                user_id: uid,
+                day: r.day,
+                app_name: r.app_name,
+                seconds: clampInt(r.seconds),
+                updated_at: nowIso,
+              })),
+              'user_id,day,app_name'
+            );
+          });
+
+          const projectDaily = buildUserProjectDaily(
+            activities,
+            manualEntries,
+            projects,
+            daysBack,
+            anchorIso,
+            daily
+          );
+          await runStep('user_project_daily', async () => {
+            await upsertAll(
+              'user_project_daily',
+              projectDaily.map((r) => ({
+                user_id: uid,
+                day: r.day,
+                project_name: r.project_name,
+                seconds: clampInt(r.seconds),
+                updated_at: nowIso,
+              })),
+              'user_id,day,project_name'
+            );
+          });
+
+          const taskBlocksDaily = buildUserTaskBlockDaily(taskSegments, blockTags, corporations, daysBack, anchorIso);
+          await runStep('user_task_block_daily', async () => {
+            await upsertAll(
+              'user_task_block_daily',
+              taskBlocksDaily.map((r) => ({
+                user_id: uid,
+                day: r.day,
+                corporation_id: r.corporation_id,
+                task_type: r.task_type,
+                task_type_detail: r.task_type_detail,
+                label: r.label,
+                seconds: clampInt(r.seconds),
+                updated_at: nowIso,
+              })),
+              'user_id,day,label'
+            );
+          });
+        };
+
+        const todayDay = dayStrFromIso(nowIso);
+        await uploadRollupWindow(todayDay, 30, true);
+
+        const oldestLocalDay = oldestLocalTrackedDay(activities, manualEntries, taskSegments);
+        const backfillCursor = readBackfillCursor(uid);
+        const needsHistoricalBackfill =
+          Boolean(oldestLocalDay) && (!backfillCursor || startOfDayLocal(oldestLocalDay!).getTime() < startOfDayLocal(backfillCursor).getTime());
+
+        if (reason === 'manual' && oldestLocalDay && needsHistoricalBackfill) {
+          // Backfill in month-sized chunks to avoid long UI stalls and large payload spikes.
+          let chunkEndDay = todayDay;
+          while (startOfDayLocal(chunkEndDay).getTime() >= startOfDayLocal(oldestLocalDay).getTime()) {
+            const daysInChunk = Math.min(31, diffDaysInclusive(oldestLocalDay, chunkEndDay));
+            await uploadRollupWindow(chunkEndDay, daysInChunk, false);
+            const nextChunkEnd = addDaysLocal(startOfDayLocal(chunkEndDay), -daysInChunk);
+            chunkEndDay = localDayKey(nextChunkEnd);
+          }
+          writeBackfillCursor(uid, oldestLocalDay);
+        }
 
         const taskLabel = currentTaskLabel(taskSegments, blockTags, corporations);
         const latestActivity = activities.slice().sort((a, b) => b.endTime.localeCompare(a.endTime))[0];
         const currentProject =
           latestActivity?.projectId ? projects.find((p) => p.id === latestActivity.projectId)?.name : undefined;
 
-        await upsertAll(
-          'user_current_status',
-          [
-            {
-              user_id: uid,
-              tracking_status: trackingStatus,
-              current_app: currentApp || null,
-              current_project: currentProject ?? null,
-              current_task_label: taskLabel,
-              last_sync_at: nowIso,
-              updated_at: nowIso,
-            },
-          ],
-          'user_id'
-        );
+        await runStep('user_current_status', async () => {
+          await upsertAll(
+            'user_current_status',
+            [
+              {
+                user_id: uid,
+                tracking_status: trackingStatus,
+                current_app: currentApp || null,
+                current_project: currentProject ?? null,
+                current_task_label: taskLabel,
+                last_sync_at: nowIso,
+                updated_at: nowIso,
+              },
+            ],
+            'user_id'
+          );
+        });
 
-        useStore.setState({ syncStatus: 'synced', lastSynced: nowIso });
+        lastAutoSyncAtRef.current = Date.now();
+        if (failures.length === 0) {
+          useStore.setState({ syncStatus: 'synced', lastSynced: nowIso });
+        } else if (failures.length >= 7) {
+          useStore.setState({ syncStatus: 'error' });
+        } else {
+          useStore.setState({ syncStatus: 'partial', lastSynced: nowIso });
+        }
       } catch (e) {
         console.error('supabase sync', reason, e);
         useStore.setState({ syncStatus: 'error' });
@@ -389,6 +626,13 @@ export function useSupabaseSync(enabled: boolean) {
         busyRef.current = false;
       }
     };
+
+    void doHeartbeat();
+
+    // Lightweight presence heartbeat every 30 seconds.
+    const heartbeatId = window.setInterval(() => {
+      void doHeartbeat();
+    }, 30_000);
 
     // Run a sync when enabled / when user clicks sync (syncNonce changes).
     void doSync('manual');
@@ -401,8 +645,11 @@ export function useSupabaseSync(enabled: boolean) {
       void doSync('auto');
     }, 60_000);
 
-    return () => clearInterval(id);
+    return () => {
+      clearInterval(heartbeatId);
+      clearInterval(id);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, settings.syncEnabled, settings.idleThreshold, syncNonce]);
+  }, [enabled, syncEnabled, syncNonce]);
 }
 

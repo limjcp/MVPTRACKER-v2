@@ -22,7 +22,7 @@ function isOnline(lastHeartbeatIso: string | null, windowMinutes = 2): boolean {
   return Number.isFinite(t) && Date.now() - t <= windowMinutes * 60_000;
 }
 
-function fmtAgo(iso: string | null): string {
+function fmtAgo(iso: string | null, _tick?: number): string {
   if (!iso) return 'never';
   try {
     return `${formatDistanceToNowStrict(new Date(iso))} ago`;
@@ -67,6 +67,7 @@ export default function Users() {
 
   const [resetFor, setResetFor] = useState<ApiUser | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [relativeTick, setRelativeTick] = useState(0);
 
   const refresh = async () => {
     setLoading(true);
@@ -83,6 +84,48 @@ export default function Users() {
 
   useEffect(() => {
     void refresh();
+  }, []);
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      setRelativeTick((x) => x + 1);
+    }, 30_000);
+    return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    if (!supabase) return;
+    const ch = supabase
+      .channel('admin-users-presence')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'user_presence' }, (payload: any) => {
+        const eventType = String(payload?.eventType ?? '');
+        const nextRow = payload?.new as { user_id?: string; last_heartbeat_at?: string | null; last_active_at?: string | null } | null;
+        const oldRow = payload?.old as { user_id?: string } | null;
+        const uid = String(nextRow?.user_id ?? oldRow?.user_id ?? '').trim();
+        if (!uid) return;
+        setUsers((prev) => {
+          let changed = false;
+          const nextUsers = prev.map((u) => {
+            if (u.id !== uid) return u;
+            changed = true;
+            if (eventType === 'DELETE') {
+              return { ...u, presence: null };
+            }
+            return {
+              ...u,
+              presence: {
+                last_heartbeat_at: nextRow?.last_heartbeat_at ?? null,
+                last_active_at: nextRow?.last_active_at ?? null,
+              },
+            };
+          });
+          return changed ? nextUsers : prev;
+        });
+      })
+      .subscribe();
+    return () => {
+      void supabase.removeChannel(ch);
+    };
   }, []);
 
   const filtered = useMemo(() => {
@@ -111,7 +154,7 @@ export default function Users() {
             Users
           </h2>
           <p className="text-white/35 text-xs mt-1">
-            Admin user management · “Last sign out” is approximated from last heartbeat.
+            Admin user management · online updates from realtime presence heartbeat.
           </p>
         </div>
 
@@ -195,8 +238,11 @@ export default function Users() {
           ) : (
             filtered.map((u) => {
               const online = isOnline(u.presence?.last_heartbeat_at ?? null);
-              const lastSeen = fmtAgo(u.presence?.last_heartbeat_at ?? null);
-              const lastActive = fmtAgo(u.presence?.last_active_at ?? null);
+              const lastSeenOrLoginIso = u.presence?.last_heartbeat_at ?? u.last_sign_in_at ?? null;
+              const lastSeen = fmtAgo(lastSeenOrLoginIso, relativeTick);
+              const lastActiveIso =
+                u.presence?.last_active_at ?? u.presence?.last_heartbeat_at ?? u.last_sign_in_at ?? null;
+              const lastActive = fmtAgo(lastActiveIso, relativeTick);
               return (
                 <div key={u.id} className="px-4 py-4">
                   <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
@@ -210,7 +256,7 @@ export default function Users() {
                         <p className="text-white/30 text-xs mt-0.5">
                           Role: <span className="text-white/55 font-semibold">{u.role ?? '—'}</span>
                           <span className="text-white/20"> · </span>
-                          Last sign out: <span className="text-white/45">{lastSeen}</span>
+                          Last seen/login: <span className="text-white/45">{lastSeen}</span>
                           <span className="text-white/20"> · </span>
                           Last active: <span className="text-white/45">{lastActive}</span>
                         </p>

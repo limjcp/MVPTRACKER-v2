@@ -287,6 +287,8 @@ export default function Sidebar() {
             <RefreshCw className="w-3.5 h-3.5 text-blue-400 animate-spin" />
           ) : syncStatus === 'synced' ? (
             <Cloud className="w-3.5 h-3.5 text-emerald-400" />
+          ) : syncStatus === 'partial' ? (
+            <Cloud className="w-3.5 h-3.5 text-amber-400" />
           ) : syncStatus === 'error' ? (
             <CloudOff className="w-3.5 h-3.5 text-red-400" />
           ) : (
@@ -297,6 +299,8 @@ export default function Sidebar() {
               ? 'Syncing…'
               : syncStatus === 'synced'
                 ? 'Synced with Supabase'
+                : syncStatus === 'partial'
+                  ? 'Partially synced'
                 : syncStatus === 'error'
                   ? 'Sync error'
                   : 'Offline'}

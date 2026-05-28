@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { format, formatDistanceToNowStrict, subDays } from 'date-fns';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { format, formatDistanceToNowStrict, parseISO, subDays } from 'date-fns';
 import {
   Area,
   AreaChart,
@@ -7,12 +7,15 @@ import {
   BarChart,
   CartesianGrid,
   Legend,
+  Pie,
+  PieChart,
+  Cell,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from 'recharts';
-import { RefreshCw, X } from 'lucide-react';
+import { Filter, RefreshCw, X } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { cn } from '../utils/cn';
 import StaffDashboardFromSupabase from './StaffDashboardFromSupabase';
@@ -38,6 +41,14 @@ type TaskBlockDailyRow = {
   day: string;
   label: string;
   seconds: number;
+};
+type HourlyRow = {
+  user_id: string;
+  day: string;
+  hour: number;
+  total_seconds: number;
+  productive_seconds: number;
+  idle_seconds: number;
 };
 type CurrentStatusRow = {
   user_id: string;
@@ -97,29 +108,133 @@ function uidKey(userId: string): string {
   return String(userId || '').toLowerCase();
 }
 
+function hourLabel(hour: number): string {
+  const h = Math.max(0, Math.min(23, Math.floor(hour)));
+  if (h === 0) return '12a';
+  if (h < 12) return `${h}a`;
+  if (h === 12) return '12p';
+  return `${h - 12}p`;
+}
+
+const PIE_COLORS = [
+  '#8B5CF6',
+  '#3B82F6',
+  '#14B8A6',
+  '#10B981',
+  '#F59E0B',
+  '#EF4444',
+  '#A855F7',
+];
+
 export default function Overview() {
   const [range, setRange] = useState<RangeKey>('today');
+  const [rangeMode, setRangeMode] = useState<'preset' | 'custom'>('preset');
+  const [filterOpen, setFilterOpen] = useState(false);
+  const filterWrapRef = useRef<HTMLDivElement>(null);
+  const [customFrom, setCustomFrom] = useState(() => format(subDays(new Date(), 6), 'yyyy-MM-dd'));
+  const [customTo, setCustomTo] = useState(() => format(new Date(), 'yyyy-MM-dd'));
+  const [draftFrom, setDraftFrom] = useState(customFrom);
+  const [draftTo, setDraftTo] = useState(customTo);
   const [refreshKey, setRefreshKey] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
   const [staffDashboardUserId, setStaffDashboardUserId] = useState<string | null>(null);
 
   const [roles, setRoles] = useState<RoleRow[]>([]);
   const [profiles, setProfiles] = useState<ProfileRow[]>([]);
   const [presence, setPresence] = useState<PresenceRow[]>([]);
   const [daily, setDaily] = useState<DailyRow[]>([]);
+  const [hourly, setHourly] = useState<HourlyRow[]>([]);
   const [apps, setApps] = useState<AppDailyRow[]>([]);
   const [projectsDaily, setProjectsDaily] = useState<ProjectDailyRow[]>([]);
   const [taskBlocksDaily, setTaskBlocksDaily] = useState<TaskBlockDailyRow[]>([]);
   const [currentStatus, setCurrentStatus] = useState<CurrentStatusRow[]>([]);
 
-  const { today, startDay } = useMemo(() => {
+  const { today, startDay, endDay } = useMemo(() => {
     const now = new Date();
+    const todayStr = format(now, 'yyyy-MM-dd');
+    if (rangeMode === 'custom') {
+      let a = customFrom.trim() || todayStr;
+      let b = customTo.trim() || todayStr;
+      if (a > b) {
+        const t = a;
+        a = b;
+        b = t;
+      }
+      return { today: todayStr, startDay: a, endDay: b };
+    }
     return {
-      today: format(now, 'yyyy-MM-dd'),
+      today: todayStr,
       startDay: rangeToStartDay(range, now),
+      endDay: todayStr,
     };
-  }, [range, refreshKey]);
+  }, [rangeMode, range, customFrom, customTo, refreshKey]);
+
+  const isSingleDay = Boolean(startDay && startDay === endDay);
+
+  const rangeSummaryLabel = useMemo(() => {
+    if (rangeMode === 'custom') {
+      try {
+        return `${format(parseISO(startDay ?? endDay), 'MMM d')} – ${format(parseISO(endDay), 'MMM d, yyyy')}`;
+      } catch {
+        return `${startDay ?? endDay} → ${endDay}`;
+      }
+    }
+    if (range === 'today') return 'Today';
+    if (range === '7d') return 'Last 7 days';
+    if (range === '30d') return 'Last 30 days';
+    return 'All time';
+  }, [rangeMode, range, startDay, endDay]);
+
+  const totalsStatLabel = useMemo(() => {
+    if (rangeMode === 'custom') return 'Custom range';
+    return rangeTotalsStatLabel(range);
+  }, [rangeMode, range]);
+
+  useEffect(() => {
+    if (!filterOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (filterWrapRef.current && !filterWrapRef.current.contains(e.target as Node)) {
+        setFilterOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [filterOpen]);
+
+  const openFilterPanel = () => {
+    setFilterOpen((wasOpen) => {
+      if (!wasOpen) {
+        if (rangeMode === 'custom') {
+          setDraftFrom(customFrom);
+          setDraftTo(customTo);
+        } else {
+          setDraftFrom(startDay ?? today);
+          setDraftTo(endDay);
+        }
+      }
+      return !wasOpen;
+    });
+  };
+
+  const applyCustomRange = () => {
+    let a = draftFrom.trim();
+    let b = draftTo.trim();
+    if (!a || !b) {
+      window.alert('Choose both a start and end date.');
+      return;
+    }
+    if (a > b) {
+      const t = a;
+      a = b;
+      b = t;
+    }
+    setCustomFrom(a);
+    setCustomTo(b);
+    setRangeMode('custom');
+    setFilterOpen(false);
+  };
 
   useEffect(() => {
     const client = supabase;
@@ -132,6 +247,7 @@ export default function Overview() {
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setWarning(null);
 
     void (async () => {
       try {
@@ -149,6 +265,9 @@ export default function Overview() {
         const userIds = (roleRows ?? []).map((r: any) => String(r.user_id));
         setRoles((roleRows ?? []) as any);
         setPresence((presenceRows ?? []) as any);
+        if ((roleRows ?? []).length === 0) {
+          setWarning('No users found in user_roles. Users without role rows will be missing from this view.');
+        }
 
         if (userIds.length > 0) {
           const { data: profRows } = await client
@@ -162,24 +281,27 @@ export default function Overview() {
 
         // Stats + top apps for selected range
         const dailyQ = client.from('user_daily_stats').select('*');
+        const hourlyQ = client.from('user_hourly_stats').select('user_id, day, hour, total_seconds, productive_seconds, idle_seconds');
         const appsQ = client.from('user_app_daily').select('*');
         const projQ = client.from('user_project_daily').select('*');
         const taskBlocksQ = client.from('user_task_block_daily').select('user_id, day, label, seconds');
         if (startDay) {
-          dailyQ.gte('day', startDay).lte('day', today);
-          appsQ.gte('day', startDay).lte('day', today);
-          projQ.gte('day', startDay).lte('day', today);
-          taskBlocksQ.gte('day', startDay).lte('day', today);
+          dailyQ.gte('day', startDay).lte('day', endDay);
+          appsQ.gte('day', startDay).lte('day', endDay);
+          projQ.gte('day', startDay).lte('day', endDay);
+          taskBlocksQ.gte('day', startDay).lte('day', endDay);
         }
 
         const [
           { data: dailyRows, error: dailyErr },
+          { data: hourlyRows, error: hourlyErr },
           { data: appRows, error: appErr },
           { data: projRows, error: projErr },
           { data: taskBlockRows, error: taskBlockErr },
           { data: statusRows, error: statusErr },
         ] = await Promise.all([
           dailyQ,
+          isSingleDay ? hourlyQ.eq('day', endDay) : hourlyQ.gte('day', startDay ?? '1900-01-01').lte('day', endDay),
           appsQ,
           projQ,
           taskBlocksQ,
@@ -187,16 +309,25 @@ export default function Overview() {
         ]);
 
         if (dailyErr) throw dailyErr;
+        if (hourlyErr) throw hourlyErr;
         if (appErr) throw appErr;
         if (projErr) throw projErr;
-        if (taskBlockErr) throw taskBlockErr;
+        if (taskBlockErr) {
+          setWarning((prev) =>
+            prev
+              ? `${prev} Task-block rollups unavailable; showing daily/project/app-derived totals.`
+              : 'Task-block rollups unavailable; showing daily/project/app-derived totals.'
+          );
+          console.warn('admin overview: user_task_block_daily query failed', taskBlockErr);
+        }
         if (statusErr) throw statusErr;
         if (cancelled) return;
 
         setDaily((dailyRows ?? []) as any);
+        setHourly((hourlyRows ?? []) as any);
         setApps((appRows ?? []) as any);
         setProjectsDaily((projRows ?? []) as any);
-        setTaskBlocksDaily((taskBlockRows ?? []) as any);
+        setTaskBlocksDaily((taskBlockErr ? [] : taskBlockRows ?? []) as any);
         setCurrentStatus((statusRows ?? []) as any);
       } catch (e: any) {
         if (!cancelled) setError(String(e?.message || e));
@@ -208,7 +339,7 @@ export default function Overview() {
     return () => {
       cancelled = true;
     };
-  }, [range, startDay, today, refreshKey]);
+  }, [range, rangeMode, isSingleDay, startDay, endDay, refreshKey]);
 
   const profilesById = useMemo(() => new Map(profiles.map((p) => [p.user_id, p])), [profiles]);
   const presenceById = useMemo(() => new Map(presence.map((p) => [p.user_id, p])), [presence]);
@@ -218,9 +349,9 @@ export default function Overview() {
     return (day: string) => {
       if (startDay == null) return true;
       const k = dayKeyFromRow(day);
-      return k >= startDay && k <= today;
+      return k >= startDay && k <= endDay;
     };
-  }, [startDay, today]);
+  }, [startDay, endDay]);
 
   /**
    * Prefer `user_daily_stats` for the three headline metrics. If those rows are missing or all zero
@@ -340,16 +471,29 @@ export default function Overview() {
   const overallSeries = useMemo(() => {
     const byDay = new Map<string, { day: string; hours: number }>();
     for (const r of daily) {
-      const cur = byDay.get(r.day) ?? { day: r.day, hours: 0 };
+      if (!dayInSelectedRange(r.day)) continue;
+      const k = dayKeyFromRow(r.day);
+      const cur = byDay.get(k) ?? { day: k, hours: 0 };
       cur.hours += secondsToHours(safeNum(r.total_seconds) || safeNum((r as any).totalTime));
-      byDay.set(r.day, cur);
+      byDay.set(k, cur);
     }
     return [...byDay.values()].sort((a, b) => a.day.localeCompare(b.day));
-  }, [daily]);
+  }, [daily, dayInSelectedRange]);
+
+  const overallHourlySeries = useMemo(() => {
+    const byHour = Array.from({ length: 24 }, (_, hour) => ({ hour, label: hourLabel(hour), hours: 0 }));
+    for (const r of hourly) {
+      if (dayKeyFromRow(r.day) !== endDay) continue;
+      const h = Math.max(0, Math.min(23, Number(r.hour) || 0));
+      byHour[h]!.hours += secondsToHours(safeNum(r.total_seconds));
+    }
+    return byHour;
+  }, [hourly, endDay]);
 
   const topAppsOverall = useMemo(() => {
     const totals = new Map<string, number>();
     for (const r of apps) {
+      if (!dayInSelectedRange(r.day)) continue;
       totals.set(r.app_name, (totals.get(r.app_name) ?? 0) + safeNum(r.seconds));
     }
     const items = [...totals.entries()]
@@ -357,9 +501,43 @@ export default function Overview() {
       .sort((a, b) => b.hours - a.hours)
       .slice(0, 10);
     return items;
-  }, [apps]);
+  }, [apps, dayInSelectedRange]);
+
+  const topBlocksOverall = useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const r of taskBlocksDaily) {
+      if (!dayInSelectedRange(r.day)) continue;
+      const k = String(r.label || '').trim() || 'Untagged task block';
+      totals.set(k, (totals.get(k) ?? 0) + safeNum(r.seconds));
+    }
+    return [...totals.entries()]
+      .map(([label, seconds]) => ({ label, hours: secondsToHours(seconds) }))
+      .sort((a, b) => b.hours - a.hours)
+      .slice(0, 8);
+  }, [taskBlocksDaily, dayInSelectedRange]);
+
+  const topProjectsOverall = useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const r of projectsDaily) {
+      if (!dayInSelectedRange(r.day)) continue;
+      const k = String(r.project_name || '').trim() || 'Unknown';
+      totals.set(k, (totals.get(k) ?? 0) + safeNum(r.seconds));
+    }
+    return [...totals.entries()]
+      .map(([name, seconds]) => ({ name, seconds, hours: secondsToHours(seconds) }))
+      .sort((a, b) => b.seconds - a.seconds);
+  }, [projectsDaily, dayInSelectedRange]);
+
+  const topProjectsPie = useMemo(() => {
+    const top = topProjectsOverall.slice(0, 5);
+    const otherSeconds = topProjectsOverall.slice(5).reduce((acc, x) => acc + x.seconds, 0);
+    const rows = top.map((x) => ({ name: x.name, value: x.seconds, hours: x.hours }));
+    if (otherSeconds > 0) rows.push({ name: 'Other', value: otherSeconds, hours: secondsToHours(otherSeconds) });
+    return rows;
+  }, [topProjectsOverall]);
 
   const staffUsers = useMemo(() => roles.filter((r) => r.role === 'staff'), [roles]);
+  const adminUsers = useMemo(() => roles.filter((r) => r.role === 'admin'), [roles]);
   const selectedProfile = useMemo(() => {
     if (!staffDashboardUserId) return undefined;
     return profilesById.get(staffDashboardUserId);
@@ -404,8 +582,9 @@ export default function Overview() {
         <div>
           <h2 className="text-white text-xl font-semibold">Overview</h2>
           <p className="text-white/35 text-xs mt-1">
-            Staff analytics from Supabase · {range === 'today' ? 'Today' : range === '7d' ? 'Last 7 days' : range === '30d' ? 'Last 30 days' : 'All time'}
+            Staff analytics from Supabase · {rangeSummaryLabel}
           </p>
+          {warning ? <p className="text-amber-300/80 text-[11px] mt-2">{warning}</p> : null}
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -427,37 +606,115 @@ export default function Overview() {
               <button
                 key={k}
                 type="button"
-                onClick={() => setRange(k)}
+                onClick={() => {
+                  setRangeMode('preset');
+                  setRange(k);
+                }}
                 className={cn(
                   'px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors',
-                  range === k ? 'bg-violet-500/25 text-violet-200' : 'text-white/40 hover:text-white/70'
+                  rangeMode === 'preset' && range === k ? 'bg-violet-500/25 text-violet-200' : 'text-white/40 hover:text-white/70'
                 )}
               >
                 {label}
               </button>
             ))}
           </div>
+          <div className="relative" ref={filterWrapRef}>
+            <button
+              type="button"
+              onClick={openFilterPanel}
+              className={cn(
+                'flex items-center gap-2 px-4 py-2 rounded-xl bg-white/[0.04] border text-xs font-semibold transition-colors',
+                filterOpen || rangeMode === 'custom'
+                  ? 'border-violet-500/35 text-violet-200'
+                  : 'border-white/[0.06] text-white/60 hover:text-white hover:border-white/[0.1]'
+              )}
+            >
+              <Filter className="w-3.5 h-3.5" />
+              Filter
+            </button>
+            {filterOpen ? (
+              <div
+                className="absolute right-0 top-full mt-2 w-[min(calc(100vw-3rem),288px)] rounded-xl border border-white/[0.08] bg-[#1a1d26] shadow-xl shadow-black/40 p-4 z-50"
+                role="dialog"
+                aria-label="Custom date range"
+              >
+                <p className="text-white/45 text-[11px] font-semibold uppercase tracking-wider mb-3">Date range</p>
+                <div className="space-y-3">
+                  <label className="block">
+                    <span className="text-white/40 text-xs mb-1 block">From</span>
+                    <input
+                      type="date"
+                      value={draftFrom}
+                      onChange={(e) => setDraftFrom(e.target.value)}
+                      className="w-full rounded-lg border border-white/[0.08] bg-[#0D0F14] text-white text-sm px-2 py-2 outline-none focus:border-violet-500/35 [color-scheme:dark]"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-white/40 text-xs mb-1 block">To</span>
+                    <input
+                      type="date"
+                      value={draftTo}
+                      onChange={(e) => setDraftTo(e.target.value)}
+                      className="w-full rounded-lg border border-white/[0.08] bg-[#0D0F14] text-white text-sm px-2 py-2 outline-none focus:border-violet-500/35 [color-scheme:dark]"
+                    />
+                  </label>
+                </div>
+                <div className="flex justify-end gap-2 mt-4">
+                  <button
+                    type="button"
+                    onClick={() => setFilterOpen(false)}
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium text-white/50 hover:text-white/80 hover:bg-white/[0.06] transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={applyCustomRange}
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium bg-violet-500/20 text-violet-200 border border-violet-500/25 hover:bg-violet-500/30 transition-colors"
+                  >
+                    Apply
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
         </div>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mt-5">
         <div className="rounded-2xl border border-white/[0.06] bg-[#111318] p-4">
-          <p className="text-white/55 text-xs font-semibold uppercase tracking-wider">Total hours (all staff)</p>
+          <p className="text-white/55 text-xs font-semibold uppercase tracking-wider">
+            Total hours (all staff){isSingleDay ? ' · 24h' : ''}
+          </p>
           <div className="h-56 mt-3">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={overallSeries} margin={{ left: 6, right: 12, top: 10, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="mvptimeHours" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="rgba(139,92,246,0.55)" stopOpacity={1} />
-                    <stop offset="95%" stopColor="rgba(139,92,246,0.06)" stopOpacity={1} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
-                <XAxis dataKey="day" tick={{ fill: 'rgba(255,255,255,0.35)', fontSize: 10 }} />
-                <YAxis tick={{ fill: 'rgba(255,255,255,0.35)', fontSize: 10 }} />
-                <Tooltip contentStyle={{ background: '#0D0F14', border: '1px solid rgba(255,255,255,0.08)' }} />
-                <Area type="monotone" dataKey="hours" stroke="rgba(139,92,246,0.9)" fill="url(#mvptimeHours)" strokeWidth={2} />
-              </AreaChart>
+              {isSingleDay ? (
+                <BarChart data={overallHourlySeries} margin={{ left: 6, right: 12, top: 10, bottom: 0 }}>
+                  <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
+                  <XAxis dataKey="label" tick={{ fill: 'rgba(255,255,255,0.35)', fontSize: 10 }} interval={1} />
+                  <YAxis tick={{ fill: 'rgba(255,255,255,0.35)', fontSize: 10 }} />
+                  <Tooltip
+                    contentStyle={{ background: '#0D0F14', border: '1px solid rgba(255,255,255,0.08)' }}
+                    formatter={(v: any) => [`${Number(v || 0).toFixed(2)}h`, 'Hours']}
+                  />
+                  <Bar dataKey="hours" name="Hours" fill="rgba(139,92,246,0.8)" radius={[6, 6, 0, 0]} />
+                </BarChart>
+              ) : (
+                <AreaChart data={overallSeries} margin={{ left: 6, right: 12, top: 10, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="mvptimeHours" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="rgba(139,92,246,0.55)" stopOpacity={1} />
+                      <stop offset="95%" stopColor="rgba(139,92,246,0.06)" stopOpacity={1} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
+                  <XAxis dataKey="day" tick={{ fill: 'rgba(255,255,255,0.35)', fontSize: 10 }} />
+                  <YAxis tick={{ fill: 'rgba(255,255,255,0.35)', fontSize: 10 }} />
+                  <Tooltip contentStyle={{ background: '#0D0F14', border: '1px solid rgba(255,255,255,0.08)' }} />
+                  <Area type="monotone" dataKey="hours" stroke="rgba(139,92,246,0.9)" fill="url(#mvptimeHours)" strokeWidth={2} />
+                </AreaChart>
+              )}
             </ResponsiveContainer>
           </div>
         </div>
@@ -479,11 +736,64 @@ export default function Overview() {
         </div>
       </div>
 
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mt-4">
+        <div className="rounded-2xl border border-white/[0.06] bg-[#111318] p-4">
+          <p className="text-white/55 text-xs font-semibold uppercase tracking-wider">Top blocks (all staff)</p>
+          <div className="h-64 mt-3">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={[...topBlocksOverall].reverse()} layout="vertical" margin={{ left: 6, right: 20, top: 10, bottom: 0 }}>
+                <CartesianGrid stroke="rgba(255,255,255,0.06)" horizontal={false} />
+                <XAxis type="number" tick={{ fill: 'rgba(255,255,255,0.35)', fontSize: 10 }} />
+                <YAxis
+                  dataKey="label"
+                  type="category"
+                  width={180}
+                  tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }}
+                  interval={0}
+                />
+                <Tooltip
+                  contentStyle={{ background: '#0D0F14', border: '1px solid rgba(255,255,255,0.08)' }}
+                  formatter={(v: any) => [`${Number(v || 0).toFixed(2)}h`, 'Hours']}
+                />
+                <Bar dataKey="hours" name="Hours" fill="rgba(99,102,241,0.8)" radius={[0, 6, 6, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-white/[0.06] bg-[#111318] p-4">
+          <p className="text-white/55 text-xs font-semibold uppercase tracking-wider">Top projects (all staff)</p>
+          <div className="h-64 mt-3">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={topProjectsPie}
+                  dataKey="value"
+                  nameKey="name"
+                  innerRadius={58}
+                  outerRadius={92}
+                  paddingAngle={2}
+                >
+                  {topProjectsPie.map((entry, idx) => (
+                    <Cell key={`${entry.name}:${idx}`} fill={PIE_COLORS[idx % PIE_COLORS.length]} />
+                  ))}
+                </Pie>
+                <Tooltip
+                  contentStyle={{ background: '#0D0F14', border: '1px solid rgba(255,255,255,0.08)' }}
+                  formatter={(v: any) => [`${secondsToHours(Number(v || 0)).toFixed(2)}h`, 'Hours']}
+                />
+                <Legend />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+
       <div className="mt-5 rounded-2xl border border-white/[0.06] bg-[#111318] overflow-hidden">
         <div className="px-4 py-3 border-b border-white/[0.06]">
           <p className="text-white/70 text-sm font-semibold">Staff</p>
           <p className="text-white/30 text-xs mt-0.5">
-            Totals, top blocks, and projects use the selected range ({range === 'today' ? 'today' : range === 'all' ? 'all synced days' : `${range}`}). Presence and “last seen” are live.
+            Totals, top blocks, and projects use the selected range ({rangeSummaryLabel.toLowerCase()}). Presence and “last seen” are live.
           </p>
         </div>
 
@@ -535,7 +845,89 @@ export default function Overview() {
                     </div>
 
                     <div className="grid grid-cols-3 gap-2 min-w-0">
-                      <Stat label={rangeTotalsStatLabel(range)} value={totalFmt} />
+                      <Stat label={totalsStatLabel} value={totalFmt} />
+                      <Stat label="Productive" value={prodFmt} />
+                      <Stat label="Idle/AFK" value={idleFmt} />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 min-w-0">
+                      <MiniList
+                        title="Top blocks"
+                        items={userTopBlocks.map((a) => ({
+                          left: a.label,
+                          right: formatHrMinFromSeconds(safeNum(a.seconds)),
+                        }))}
+                        empty="No block data in range"
+                      />
+                      <MiniList
+                        title="Projects"
+                        items={proj.map((x) => ({ left: x.name, right: formatHrMinFromSeconds(x.seconds) }))}
+                        empty="No project time yet"
+                      />
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+
+      <div className="mt-5 rounded-2xl border border-white/[0.06] bg-[#111318] overflow-hidden">
+        <div className="px-4 py-3 border-b border-white/[0.06]">
+          <p className="text-white/70 text-sm font-semibold">Admins</p>
+          <p className="text-white/30 text-xs mt-0.5">
+            Admin user presence and current status from live heartbeat and sync status.
+          </p>
+        </div>
+
+        <div className="divide-y divide-white/[0.06]">
+          {adminUsers.length === 0 ? (
+            <div className="p-5 text-white/40 text-sm">No admin users found in `user_roles`.</div>
+          ) : (
+            adminUsers.map((u) => {
+              const p = profilesById.get(u.user_id);
+              const pres = presenceById.get(u.user_id);
+              const status = statusById.get(u.user_id);
+              const online = pres?.last_heartbeat_at ? isOnline(pres.last_heartbeat_at) : false;
+              const seen = pres?.last_heartbeat_at
+                ? `${formatDistanceToNowStrict(new Date(pres.last_heartbeat_at))} ago`
+                : 'never';
+              const sid = uidKey(u.user_id);
+              const d = staffSummaryTotalsByUser.get(sid);
+              const totalFmt = formatHrMinFromSeconds(safeNum(d?.total_seconds ?? 0));
+              const prodFmt = formatHrMinFromSeconds(safeNum(d?.productive_seconds ?? 0));
+              const idleFmt = formatHrMinFromSeconds(safeNum(d?.idle_seconds ?? 0));
+              const userTopBlocks = topBlocksByUser.get(sid) ?? [];
+              const proj = topProjectsByUser.get(sid) ?? [];
+              const taskLabel = status?.current_task_label ?? null;
+
+              return (
+                <div key={`admin:${u.user_id}`} className="px-4 py-4">
+                  <div className="flex flex-col gap-3 min-w-0">
+                    <div className="flex items-start gap-3 min-w-0">
+                      <div className={cn('mt-1 w-2.5 h-2.5 rounded-full shrink-0', online ? 'bg-emerald-400' : 'bg-white/20')} />
+                      <div className="min-w-0 flex-1">
+                        <button
+                          type="button"
+                          onClick={() => setStaffDashboardUserId(u.user_id)}
+                          className="text-white/80 text-sm font-semibold truncate text-left hover:text-violet-200 transition-colors"
+                          title="Open user dashboard"
+                        >
+                        {p?.full_name?.trim() || `${u.user_id.slice(0, 8)}…`}
+                        </button>
+                        <p className="text-white/30 text-xs">
+                          {online ? 'Online' : 'Offline'} · last seen {seen}
+                        </p>
+                        {taskLabel ? <p className="text-white/35 text-xs mt-1 truncate">Working on: {taskLabel}</p> : null}
+                        {status?.current_project ? (
+                          <p className="text-white/30 text-xs mt-0.5 truncate">Project: {status.current_project}</p>
+                        ) : null}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2 min-w-0">
+                      <Stat label={totalsStatLabel} value={totalFmt} />
                       <Stat label="Productive" value={prodFmt} />
                       <Stat label="Idle/AFK" value={idleFmt} />
                     </div>

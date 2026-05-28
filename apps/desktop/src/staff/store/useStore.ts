@@ -419,7 +419,7 @@ interface AppState {
   setTrackingStatus: (status: 'active' | 'idle' | 'away') => void;
   setCurrentApp: (app: string) => void;
 
-  syncStatus: 'synced' | 'syncing' | 'error' | 'offline';
+  syncStatus: 'synced' | 'syncing' | 'partial' | 'error' | 'offline';
   lastSynced: string | null;
   triggerSync: () => void;
   /** Changes whenever a sync is requested (manual or automatic). */
@@ -556,7 +556,8 @@ export const useStore = create<AppState>((set, get) => ({
     await invoke('db_ensure_open_task_segment', {
       newId: ensureSegId,
       nowIso,
-      maxGapSeconds: 5 * 60,
+      // Keep stale-open split threshold aligned with 15-minute task check-ins.
+      maxGapSeconds: 15 * 60,
     });
     const segmentRows = await invoke<any[]>('db_list_task_segments');
     const taskSegments = segmentRows.map(fromTaskSegmentRow);
